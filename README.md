@@ -119,7 +119,7 @@ npm test
 
 ## 许可
 
-[MIT License](https://github.com/AndrewB330/MusicMarbles/blob/master/LICENSE)
+[MIT License](LICENSE)
 
 Copyright (c) 2020 Andrii Borziak
 
