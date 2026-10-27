@@ -1,46 +1,167 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>MusicMarbles</title>
-
-    <link rel="stylesheet" type="text/css" href="styles/reset.css">
-    <link rel="stylesheet" type="text/css" href="styles/main.css">
-
-    <script src="scripts/libs/audiosynth.js"></script>
-    <script src="scripts/libs/tone.min.js"></script>
-    <script src="music/music.js"></script>
-    <script src="wasm/module.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音乐弹珠 — 把一首歌变成一条弹珠轨道</title>
+    <meta name="description" content="导入音频，把音符变成弹珠轨道。生成分享链接，导出 9:16、16:9、1:1、4:5 视频。链接与导出内容保留 10 分钟。">
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/styles/reset.css">
+    <link rel="stylesheet" href="/styles/landing.css">
 </head>
 <body>
+    <header class="nav">
+        <div class="nav-inner">
+            <a class="brand" href="/">
+                <span class="brand-dot" aria-hidden="true"></span>
+                <span class="brand-name">音乐弹珠</span>
+                <span class="brand-en">MUSIC MARBLES</span>
+            </a>
+            <nav>
+                <a href="#make">01 制作</a>
+                <a href="#builtins">02 内置</a>
+                <a href="#how">03 原理</a>
+            </nav>
+        </div>
+    </header>
 
-    <canvas id="main-canvas"></canvas>
-    <div style="position: absolute; left: 50%; bottom: 0; height: 33px">
-        <div class="container">
-            <div id="play-button-container">
-                <div id="play-button" onclick="ready=true;">
-                    Play
+    <main class="shell">
+        <section class="hero">
+            <div class="hero-copy">
+                <p class="eyebrow">音频输入 · 轨迹输出</p>
+                <h1>把一首歌<br><em>变成一条轨道。</em></h1>
+                <p class="lede">导入音频，音符落成横杆。一颗弹珠匀速穿过，每一次撞击都留下颜色。生成链接，或导出视频。</p>
+            </div>
+            <dl class="hero-stats">
+                <div>
+                    <dt>起步</dt>
+                    <dd>1 秒加速</dd>
+                </div>
+                <div>
+                    <dt>链接</dt>
+                    <dd>保留 10 分钟</dd>
+                </div>
+                <div>
+                    <dt>视频</dt>
+                    <dd>4 种比例</dd>
+                </div>
+            </dl>
+        </section>
+
+        <section class="workspace" id="make">
+            <div class="panel upload-panel">
+                <div class="panel-head">
+                    <div>
+                        <p class="kicker">01 / 添加音频</p>
+                        <h2>从一首歌开始</h2>
+                    </div>
+                    <p class="format-note">MP3 · WAV · M4A · FLAC</p>
+                </div>
+
+                <label class="dropzone" id="dropzone">
+                    <input type="file" id="file-input" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac">
+                    <span class="drop-icon" aria-hidden="true"></span>
+                    <span class="drop-title" id="drop-title">拖入音频，或点击选择</span>
+                    <span class="drop-sub" id="drop-sub">最长 6 分钟 · 单文件 80 MB</span>
+                </label>
+
+                <div class="file-row hidden" id="file-row">
+                    <div class="file-meta">
+                        <span class="file-dot"></span>
+                        <div>
+                            <strong id="file-name">track.mp3</strong>
+                            <small id="file-size">0 MB</small>
+                        </div>
+                    </div>
+                    <button class="text-button" id="clear-file" type="button">更换文件</button>
+                </div>
+
+                <div class="field-row">
+                    <label class="field">
+                        <span>标题</span>
+                        <input type="text" id="title-input" maxlength="80" placeholder="为这条轨道命名">
+                    </label>
+                    <button class="primary-button" id="generate-button">
+                        <span id="generate-label">生成分享链接</span>
+                        <span class="button-arrow" aria-hidden="true">→</span>
+                    </button>
+                </div>
+
+                <div class="stage hidden" id="stage">
+                    <div class="stage-line">
+                        <span id="stage-label">准备中…</span>
+                        <span id="stage-pct">0%</span>
+                    </div>
+                    <div class="stage-track"><div id="stage-fill"></div></div>
+                    <p id="stage-hint">处理过程在浏览器内完成，直到轨道准备好。</p>
+                </div>
+
+                <div class="error-box hidden" id="error-box"></div>
+
+                <div class="result hidden" id="result">
+                    <div class="result-head">
+                        <p class="kicker">链接已生成</p>
+                        <h3 id="result-title">这条轨道可以打开了</h3>
+                    </div>
+                    <div class="link-row">
+                        <input type="text" id="result-link" readonly>
+                        <button class="secondary-button" id="copy-link" type="button">复制</button>
+                    </div>
+                    <p class="expiry-note" id="result-expiry">链接保留 10 分钟。打开后可以手动延长。</p>
+                    <div class="result-actions">
+                        <a class="primary-button" id="open-link" href="#" target="_blank" rel="noopener">打开轨道</a>
+                        <button class="text-button" id="start-over" type="button">再做一条</button>
+                    </div>
                 </div>
             </div>
-            <div class="progress-bar-container">
-                <div id="progress-bar"></div>
-                <div id="progress-bar-text">0%</div>
+
+            <aside class="panel builtin-panel" id="builtins">
+                <div class="panel-head">
+                    <div>
+                        <p class="kicker">02 / 内置曲目</p>
+                        <h2>没有文件也可以</h2>
+                    </div>
+                </div>
+                <p class="builtin-copy">三首公版作品，点一首即可生成链接。内置曲目永久保留。</p>
+                <div class="builtin-list" id="builtin-list">
+                    <div class="builtin-skeleton"></div>
+                    <div class="builtin-skeleton"></div>
+                    <div class="builtin-skeleton"></div>
+                </div>
+            </aside>
+        </section>
+
+        <section class="how" id="how">
+            <div class="how-head">
+                <p class="kicker">03 / 原理</p>
+                <h2>三步，一条链接。</h2>
             </div>
-            <div id="progress-bar-hint">
-                Progress can sometimes decrease<br>
-                it's ok, that means the generator<br>
-                trying to create the hard part of the map</div>
-        </div>
-    </div>
-    <a id="github" target="_blank" href="https://github.com/AndrewB330/MusicMarbles">GitHub</a>
+            <div class="how-grid">
+                <article>
+                    <span class="step-number">01</span>
+                    <h3>导入</h3>
+                    <p>选择音频或内置曲目。浏览器找出音符的起点与音高，音频不会先上传。</p>
+                </article>
+                <article>
+                    <span class="step-number">02</span>
+                    <h3>折叠</h3>
+                    <p>引擎把每个音符折成一条横杆。弹珠保持匀速，每根横杆只撞一次。</p>
+                </article>
+                <article>
+                    <span class="step-number">03</span>
+                    <h3>分享</h3>
+                    <p>打开链接观看，或下载 9:16、16:9、1:1、4:5 的 MP4。内容保留 10 分钟。</p>
+                </article>
+            </div>
+        </section>
 
-    <script src="scripts/canvas_helper.js"></script>
-    <script src="scripts/wasm_api.js"></script>
-    <script src="scripts/constants.js"></script>
-    <script src="scripts/main.js"></script>
+        <footer class="foot">
+            <span>音乐弹珠 · MUSIC MARBLES</span>
+            <span>链接与导出内容保留 10 分钟，过期自动删除。</span>
+        </footer>
+    </main>
 
-    <div id="music-list">
-    </div>
-
+    <div class="toast" id="toast"></div>
+    <script src="/scripts/landing.js"></script>
 </body>
 </html>

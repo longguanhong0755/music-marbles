@@ -26,8 +26,8 @@ let canvasId = "main-canvas";
 
 let canvas = document.getElementById(canvasId);
 let ctx = canvas.getContext('2d');
-ctx.scale(1, -1);
 
+// World coordinates map 1:1 to canvas pixels; y grows downward.
 let offset = [0, 0];
 
 class G {

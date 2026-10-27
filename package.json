@@ -1,0 +1,35 @@
+{
+  "name": "music-marbles",
+  "version": "1.0.0",
+  "description": "把音频变成可分享的弹珠轨道，支持四种画幅的 MP4 导出。",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node tools/verify_engine.js",
+    "verify": "node tools/verify_engine.js",
+    "build:builtins": "node tools/build_builtins.js",
+    "build:basic-pitch": "esbuild scripts/transcribe-worker.js --bundle --format=iife --platform=browser --target=es2020 --outfile=scripts/dist/transcribe-worker.js"
+  },
+  "keywords": [
+    "music",
+    "visualization",
+    "marble",
+    "canvas",
+    "webcodecs"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.22.3",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "@spotify/basic-pitch": "^1.0.1",
+    "@tensorflow/tfjs": "^3.21.0",
+    "esbuild": "^0.24.2",
+    "puppeteer-core": "^23.11.1"
+  }
+}

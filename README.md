@@ -1,71 +1,126 @@
-# Music Marbles 
+# 音乐弹珠 Music Marbles
 
-[![Badge](https://img.shields.io/badge/Javascript-brightgreen.svg)](https://github.com/AndrewB330/)
-[![Badge](https://img.shields.io/badge/WASM-С++-brightgreen.svg)](https://github.com/AndrewB330/)
-<!--[![Badge](https://europe-west6-xlocc-badge.cloudfunctions.net/XLOCC/AndrewB330/MusicMarbles?ifiles=music.)](https://github.com/AndrewB330/)-->
+把一首歌变成一条可以分享的弹珠轨道。音符落成横杆，弹珠以恒定速度穿过折叠路径，每次撞击保留音高的颜色。生成链接即可在线观看，也可以导出 9:16、16:9、1:1、4:5 四种比例的 MP4。
 
-![Logo](/images/logo_small_.png?raw=true)
+这个分支把原始的「重力 + 旋转木板」物理换成了直线、轴对齐的台球引擎：路径紧凑折叠，弹珠匀速前进，每根横杆只撞一次，撞点与音符时间一一对应。
 
-Creating music using falling marbles on automatically
-generated 2D map with obstacles.
+## 快速开始
 
-#### Features
-- Iterative map generator
-- Simplified physic engine written on C++
-- Vanilla HTML5 Canvas for visualization
-- Tone.js for sound generation
-- Fully synchronized!
+需要 Node.js 18+（在 22 上测试）、npm，以及 `PATH` 里的 `ffmpeg`。
 
-# Demo
-
-[LIVE Demo](https://andrewb330.github.io/MusicMarbles/index.html) <br>
-[YouTube Video](https://youtu.be/rcDFb2OkA4Q)
-
-![UI](/images/ui_demo_v2.png?raw=true)
-
-
-# Physics engine
-In this project, I'm using my own simplified physics engine. It is written on C++ and
-compiled with emscripten to work in your browser.
-Right now engine supports only two types of objects: **Marbles** and **Planks**.
-Information about the world at some point in time is represented by the WorldState class.
-There is two very useful functions in this class: `simulate()` and `rewind_back()`.
-- `simulate()` - simulates one tick (15ms by default) of physics
-- `rewind_back()` - rewinds WorldState to its previous state, one tick before
-
-Here is a small example how you can use it:
-```cpp
-WorldState state;
-state.marbles.push_back(Marble{/*position:*/Vec2d(100, 200),/*velocity:*/Vec2d(10, 0)});
-state.marbles.push_back(Marble{Vec2d(150, 200),Vec2d(-9, 0)});
-state.marbles.push_back(Marble{Vec2d(125, 220),Vec2d(0, -2)});
-state.planks.push_back(Plank{/*first_point*/Vec2d(90, 0), /*second_point*/Vec2d(160, 0)});
-// simulate 2 seconds of physics
-while (state.elapsed_time < 2000)
-    state.simulate();
-
-/*do something*/
-
-// rewind everything to initial state
-while (state.elapsed_time > 0)
-    state.rewind_back();
+```bash
+npm install
+npm start
+# 打开 http://localhost:8080/
 ```
 
-# Algorithm
+启动时终端会打印所有可用的局域网地址。手机或同一网络里的另一台机器可以直接打开这些地址。分享链接使用浏览器访问时的 host，因此在局域网地址下生成的链接也是局域网链接。
 
-The algorithm for generating a map is pretty straightforward. 
-We know moments of time, when we want a note to be played, 
-so we can add a plank to  the world just before sound should be played. 
-Basically, the algorithm is just recursive brute-force.
+> 这是一个本地 / 局域网应用，没有登录、没有限流，上传内容会写入 `data/`。不要直接暴露到公网。
 
-TODO: add pseudo code
+## 使用流程
 
+1. **导入音频。** 支持 MP3、WAV、M4A、AAC、OGG、OPUS、FLAC，最长 6 分钟，单文件 80 MB。浏览器在本地解码、重采样，Web Worker 找出音符起点和主要音高。12 秒左右的片段通常几秒内完成。
+2. **或者选一首内置曲目。** 三首公版作品已经打包：土耳其进行曲、山魔王的宫殿、演艺人。内置曲目永久保留。
+3. **生成链接。** 音频会被裁剪到合适长度并转成 192 kbps MP3，与音符列表一起保存。链接打开的是 `/watch/<id>`。
+4. **观看或导出。** 观看页用音频时钟驱动弹珠。开头 1 秒是静音加速段：弹珠从静止开始，以 400 units/s² 加速，在音乐开始的瞬间达到恒定的 400 units/s。
 
-# How to add a melody
-If you have a .midi file you can convert it using https://tonejs.github.io/Midi to json and paste it inside `music/music.js` file.
-This solution is not perfect yet, working on custom midi uploading.
+## 10 分钟保留
 
-# License
+上传生成的轨道和导出的视频都只保留 **10 分钟**：
+
+- 创建后 10 分钟自动删除；服务端每 10 秒清扫一次，访问过期 API 或媒体地址时也会立即删除。
+- 观看页有倒计时。点击「延长 10 分钟」会把过期时间重置为当前时间 + 10 分钟。
+- 过期后页面会显示「链接已过期」，播放、下载和延长都会禁用。
+- 内置曲目不受影响，永久保留。
+
+可以用环境变量调整保留时间（单位毫秒，最低 60 秒）：
+
+```bash
+CONTENT_TTL_MS=60000 npm start
+```
+
+## 视频导出
+
+观看页点击「下载视频」，选择比例：
+
+| 比例 | 分辨率 | 常见用途 |
+| --- | --- | --- |
+| 9:16 | 1080 × 1920 | 抖音 / Reels |
+| 16:9 | 1920 × 1080 | YouTube |
+| 1:1 | 1080 × 1080 | 信息流 |
+| 4:5 | 1080 × 1350 | 竖版信息流 |
+
+导出优先走 **WebCodecs 离线渲染**：如果浏览器支持 H.264 硬件编码，就在内存中逐帧渲染并编码，不再等待实时播放，速度通常明显快于实时录制。离线视频上传后由服务端把原曲 AAC 音频封装进去。
+
+如果硬件编码不可用，会自动回退到原有的 `MediaRecorder` 实时录制。录完上传后：
+
+- 输入已经是 H.264/AAC MP4 时，服务端直接 remux，不重新编码视频。
+- 输入是 WebM/VP9 或其他编码时，服务端转成 H.264/AAC MP4。
+
+所有导出都是 30 fps。导出的 MP4 同样保留 10 分钟。
+
+## 工作原理
+
+- `scripts/engine.js`：构建紧凑折叠路径，运行恒定速度模拟。每根横杆按音符顺序、在对应时间被撞一次。
+- `scripts/onset-worker.js`：无依赖的谱通量起点检测 + FFT 峰值取音高。它追求速度，不是完整的复音转谱模型；密集混音会得到艺术化近似。
+- `scripts/scene.js`：把同一个场景渲染到任意尺寸的画布，屏幕播放和导出共用。
+- `scripts/landing.js`：上传、解码、重采样、识别、请求链接和内置曲目卡片。
+- `scripts/watch.js`：播放、1 秒加速段、暂停/重播、10 分钟倒计时、延长、过期状态和视频导出。
+- `scripts/vendor/mp4-muxer.js`：浏览器端 MP4 封装（MIT，见同目录 LICENSE）。
+- `server/index.js`：Express 服务，负责上传、轨道存储、音频裁剪/补静音、分享 URL、TTL 清扫和 ffmpeg 视频处理。
+- `tools/verify_engine.js`：对每首内置 MIDI 和 1 秒加速段做引擎校验，`npm test` 会运行它。
+
+旧的 Basic Pitch 路径（`scripts/transcribe-worker.js`、`scripts/dist/`）仍保留在仓库里做实验，但应用不会加载它，模型在 `vendor/basic-pitch/`。
+
+### 内置曲目
+
+内置曲目由 `music/music.js` 里的 MIDI 数据生成：
+
+```bash
+npm run build:builtins
+```
+
+需要 Python 3 + NumPy 和 `ffmpeg`，会写入 `builtins/<slug>/{notes.json,score.json,audio.mp3}` 和 `builtins/manifest.json`。
+
+### 验证
+
+```bash
+npm test
+```
+
+检查内容包括：横杆不重叠、都在场地内、路径与未命中的横杆保持间距、每个音符恰好命中一次、恒速成立，以及 1 秒加速段在第一个音符的时间点到达。
+
+## 配置
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PORT` | `8080` | 监听端口 |
+| `CONTENT_TTL_MS` | `600000` | 内容保留时间（毫秒，最低 60000） |
+| `PUBLIC_BASE_URL` | 请求的 host | 生成分享链接时使用的公开地址 |
+
+## 限制
+
+- 歌曲最长 6 分钟、最多 1000 根可视横杆。密集轨道会合并音符，而不是静默丢弃。
+- 服务端没有账号体系、限流或公网防护，只适合本机和可信局域网。
+- 视频导出依赖浏览器的 WebCodecs / MediaRecorder 支持。硬件离线编码不可用时会自动回退到实时录制。
+- 服务端 ffmpeg 转码是 CPU 密集型任务；如果机器支持 `h264_videotoolbox`、`h264_nvenc` 或 `h264_qsv`，会优先使用硬件编码。
+
+## 原始项目
+
+本项目 fork 自 [AndrewB330/MusicMarbles](https://github.com/AndrewB330/MusicMarbles)。原始项目用自动生成的地图和下落弹珠来演奏音乐。
+
+原始引擎特点：
+
+- 迭代式地图生成器
+- C++ 物理引擎（原 WASM 引擎保留在仓库里作参考，本分支实际运行纯 JS 引擎）
+- 原生 HTML5 Canvas
+- 原版使用 Tone.js 生成声音
+
+## 许可
+
 [MIT License](https://github.com/AndrewB330/MusicMarbles/blob/master/LICENSE)
 
 Copyright (c) 2020 Andrii Borziak
+
+`scripts/vendor/mp4-muxer.js` 版权归 Vanilagy 所有，按 MIT 许可使用，许可证见 `scripts/vendor/mp4-muxer.LICENSE`。

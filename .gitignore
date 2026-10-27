@@ -3,3 +3,10 @@
 engine/.idea
 engine/CMakeLists.txt
 engine/cmake-build-debug/
+
+node_modules/
+data/
+
+.DS_Store
+*.log
+*.pid

@@ -25,11 +25,11 @@ const BLUE = '#035db4';
 
 const MS_PER_TICK = 15;
 // Actual radius +1 because sometimes it looks like it didn't hit the plank, because hit happened in micro-tick
-const MARBLE_RADIUS = 16 + 1;
+const MARBLE_RADIUS = 12 + 1;
 // The same as in engine, this is half-width in fact
 const PLANK_WIDTH = 4;
 
-const PIANO = new Tone.PolySynth(4, Tone.Synth, {}).toMaster();
+const PIANO = new Tone.PolySynth(8, Tone.Synth, {}).toMaster();
 
 const NOTE_IMAGES = [new Image(), new Image()]
 NOTE_IMAGES[0].src = './images/note_1.png';
@@ -49,4 +49,4 @@ const TRACE_SIZE = 60;
 const RADIUS_DECAY = 0.25;
 
 const PARTICLE_IMAGE_SIZE = 16;
-const MARBLE_IMAGE_SIZE = 60;
+const MARBLE_IMAGE_SIZE = 44;

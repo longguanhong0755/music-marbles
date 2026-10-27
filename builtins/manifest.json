@@ -1,0 +1,34 @@
+{
+  "tracks": [
+    {
+      "id": "builtin-mozart-rondo",
+      "title": "土耳其进行曲",
+      "subtitle": "莫扎特",
+      "duration": 76.28750000000001,
+      "notes": "/builtins/mozart-rondo/notes.json",
+      "audio": "/builtins/mozart-rondo/audio.mp3",
+      "bytes": 1832585,
+      "bars": 445
+    },
+    {
+      "id": "builtin-mountain-king",
+      "title": "山魔王的宫殿",
+      "subtitle": "格里格",
+      "duration": 76.66968652734376,
+      "notes": "/builtins/mountain-king/notes.json",
+      "audio": "/builtins/mountain-king/audio.mp3",
+      "bytes": 1841989,
+      "bars": 280
+    },
+    {
+      "id": "builtin-entertainer",
+      "title": "演艺人",
+      "subtitle": "斯科特·乔普林",
+      "duration": 67.090625,
+      "notes": "/builtins/entertainer/notes.json",
+      "audio": "/builtins/entertainer/audio.mp3",
+      "bytes": 1611902,
+      "bars": 233
+    }
+  ]
+}

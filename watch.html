@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音乐弹珠</title>
+    <meta name="description" content="音频生成的弹珠轨道。链接保留 10 分钟，可手动延长。">
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/styles/reset.css">
+    <link rel="stylesheet" href="/styles/watch.css">
+</head>
+<body>
+    <header class="topbar">
+        <div class="topbar-inner">
+            <a class="brand" href="/">
+                <span class="brand-dot" aria-hidden="true"></span>
+                <span class="brand-name">音乐弹珠</span>
+                <span class="brand-en">MUSIC MARBLES</span>
+            </a>
+            <div class="track-block">
+                <span class="track-kicker" id="track-status">观看轨道</span>
+                <div class="track-title" id="track-title">正在加载…</div>
+            </div>
+            <div class="top-actions">
+                <button class="icon-button" id="share-button" type="button" title="复制链接">分享</button>
+                <a class="icon-button" href="/" title="制作新的轨道">新建</a>
+            </div>
+        </div>
+    </header>
+
+    <main class="player">
+        <div class="stage-frame">
+            <canvas id="stage"></canvas>
+
+            <div class="play-overlay" id="play-overlay">
+                <button class="play-card" id="play-button" type="button">
+                    <span class="play-icon" aria-hidden="true"></span>
+                    <span class="play-label">正在加载…</span>
+                    <span class="play-sub">准备音频与轨道</span>
+                </button>
+            </div>
+
+            <div class="expired-overlay hidden" id="expired-overlay">
+                <div class="expired-card">
+                    <p class="kicker">LINK EXPIRED</p>
+                    <strong>链接已过期</strong>
+                    <p id="expired-message">链接不存在，或内容已超过 10 分钟被删除。</p>
+                    <a class="primary-link" href="/">新建一条 →</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="player-bar">
+            <button class="control" id="toggle-button" type="button" title="暂停">
+                <span class="pause-icon" id="toggle-icon" aria-hidden="true"></span>
+            </button>
+            <button class="control" id="restart-button" type="button" title="重新开始">
+                <span class="restart-icon" aria-hidden="true"></span>
+            </button>
+            <div class="time" id="time-label">0:00 / 0:00</div>
+            <div class="progress" id="progress-track">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <button class="control small" id="mute-button" type="button" title="静音">
+                <span class="sound-icon" id="sound-icon" aria-hidden="true"></span>
+            </button>
+        </div>
+
+        <div class="player-meta">
+            <div class="expiry-block">
+                <span class="meta-label" id="expiry-label">链接剩余</span>
+                <span class="expiry-value" id="expiry-value">--:--</span>
+                <button class="link-button" id="extend-button" type="button">延长 10 分钟</button>
+            </div>
+            <button class="download-button" id="download-button" type="button">下载视频</button>
+        </div>
+    </main>
+
+    <footer class="watch-foot">
+        <span>音乐弹珠 · MUSIC MARBLES</span>
+        <span>链接与导出内容保留 10 分钟，过期自动删除。</span>
+    </footer>
+
+    <div class="modal hidden" id="export-modal">
+        <div class="modal-panel">
+            <div class="modal-head">
+                <div>
+                    <p class="modal-kicker">EXPORT</p>
+                    <h2>下载轨道视频</h2>
+                </div>
+                <button class="close-button" id="close-export" type="button" aria-label="关闭">×</button>
+            </div>
+            <p class="modal-copy">选择画面比例。支持时会在后台离线渲染，速度比实时录制更快；否则自动回退为实时录制。导出的文件同样保留 10 分钟。</p>
+            <div class="ratio-grid" id="ratio-grid">
+                <button class="ratio-card" data-ratio="9x16" type="button">
+                    <span class="ratio-shape portrait"></span>
+                    <strong>9:16 竖屏</strong>
+                    <small>1080 × 1920 · 抖音 / Reels</small>
+                </button>
+                <button class="ratio-card" data-ratio="16x9" type="button">
+                    <span class="ratio-shape landscape"></span>
+                    <strong>16:9 横屏</strong>
+                    <small>1920 × 1080 · YouTube</small>
+                </button>
+                <button class="ratio-card" data-ratio="1x1" type="button">
+                    <span class="ratio-shape square"></span>
+                    <strong>1:1 方形</strong>
+                    <small>1080 × 1080 · 信息流</small>
+                </button>
+                <button class="ratio-card" data-ratio="4x5" type="button">
+                    <span class="ratio-shape feed"></span>
+                    <strong>4:5 竖版</strong>
+                    <small>1080 × 1350 · 竖版信息流</small>
+                </button>
+            </div>
+            <div class="export-status" id="export-status"></div>
+            <div class="export-progress hidden" id="export-progress"><div id="export-progress-fill"></div></div>
+            <button class="primary-button hidden" id="export-download" type="button">下载 MP4</button>
+            <p class="modal-foot">MP4 · H.264 + AAC · 1080p · 30 fps</p>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script src="/scripts/engine.js"></script>
+    <script src="/scripts/scene.js"></script>
+    <script src="/scripts/vendor/mp4-muxer.js"></script>
+    <script src="/scripts/watch.js"></script>
+</body>
+</html>
