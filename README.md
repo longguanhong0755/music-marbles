@@ -4,6 +4,12 @@
 
 这个分支把原始的「重力 + 旋转木板」物理换成了直线、轴对齐的台球引擎：路径紧凑折叠，弹珠匀速前进，每根横杆只撞一次，撞点与音符时间一一对应。
 
+## 在线演示
+
+[https://longguanhong0755.github.io/music-marbles/](https://longguanhong0755.github.io/music-marbles/)
+
+GitHub Pages 托管的是静态演示：三首内置曲目可以直接播放，也可以在浏览器内实时录制并下载视频。上传、10 分钟分享链接、服务端 MP4 封装和硬件离线编码需要在本机运行完整服务。
+
 ## 快速开始
 
 需要 Node.js 18+（在 22 上测试）、npm，以及 `PATH` 里的 `ffmpeg`。
@@ -22,7 +28,7 @@ npm start
 
 1. **导入音频。** 支持 MP3、WAV、M4A、AAC、OGG、OPUS、FLAC，最长 6 分钟，单文件 80 MB。浏览器在本地解码、重采样，Web Worker 找出音符起点和主要音高。12 秒左右的片段通常几秒内完成。
 2. **或者选一首内置曲目。** 三首公版作品已经打包：土耳其进行曲、山魔王的宫殿、演艺人。内置曲目永久保留。
-3. **生成链接。** 音频会被裁剪到合适长度并转成 192 kbps MP3，与音符列表一起保存。链接打开的是 `/watch/<id>`。
+3. **生成链接。** 音频会被裁剪到合适长度并转成 192 kbps MP3，与音符列表一起保存。链接打开的是 `/watch.html?id=<id>`；旧的 `/watch/<id>` 会 302 跳到新地址。
 4. **观看或导出。** 观看页用音频时钟驱动弹珠。开头 1 秒是静音加速段：弹珠从静止开始，以 400 units/s² 加速，在音乐开始的瞬间达到恒定的 400 units/s。
 
 ## 10 分钟保留
@@ -58,7 +64,7 @@ CONTENT_TTL_MS=60000 npm start
 - 输入已经是 H.264/AAC MP4 时，服务端直接 remux，不重新编码视频。
 - 输入是 WebM/VP9 或其他编码时，服务端转成 H.264/AAC MP4。
 
-所有导出都是 30 fps。导出的 MP4 同样保留 10 分钟。
+所有导出都是 30 fps。完整服务模式下导出的 MP4 同样保留 10 分钟。GitHub Pages 静态演示没有服务端，会直接下载浏览器录制的文件：支持 H.264 时是 MP4，否则是 WebM（VP9/Opus），音频保留在文件里。
 
 ## 工作原理
 
@@ -66,7 +72,8 @@ CONTENT_TTL_MS=60000 npm start
 - `scripts/onset-worker.js`：无依赖的谱通量起点检测 + FFT 峰值取音高。它追求速度，不是完整的复音转谱模型；密集混音会得到艺术化近似。
 - `scripts/scene.js`：把同一个场景渲染到任意尺寸的画布，屏幕播放和导出共用。
 - `scripts/landing.js`：上传、解码、重采样、识别、请求链接和内置曲目卡片。
-- `scripts/watch.js`：播放、1 秒加速段、暂停/重播、10 分钟倒计时、延长、过期状态和视频导出。
+- `scripts/watch.js`：播放、1 秒加速段、暂停/重播、10 分钟倒计时、延长、过期状态和视频导出。没有后端时自动读取 `builtins/manifest.json`，并在浏览器内直接下载录制结果。
+- `.nojekyll` / 相对资源路径：同一套页面既能由 Express 在根路径提供，也能直接放到 GitHub Pages 的子路径下。
 - `scripts/vendor/mp4-muxer.js`：浏览器端 MP4 封装（MIT，见同目录 LICENSE）。
 - `server/index.js`：Express 服务，负责上传、轨道存储、音频裁剪/补静音、分享 URL、TTL 清扫和 ffmpeg 视频处理。
 - `tools/verify_engine.js`：对每首内置 MIDI 和 1 秒加速段做引擎校验，`npm test` 会运行它。

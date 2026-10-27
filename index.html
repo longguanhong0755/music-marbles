@@ -6,13 +6,14 @@
     <title>音乐弹珠 — 把一首歌变成一条弹珠轨道</title>
     <meta name="description" content="导入音频，把音符变成弹珠轨道。生成分享链接，导出 9:16、16:9、1:1、4:5 视频。链接与导出内容保留 10 分钟。">
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="/styles/reset.css">
-    <link rel="stylesheet" href="/styles/landing.css">
+    <link rel="stylesheet" href="styles/reset.css">
+    <link rel="stylesheet" href="styles/landing.css">
+    <script>window.MUSIC_MARBLES_STATIC = window.MUSIC_MARBLES_STATIC || /(^|\.)github\.io$/i.test(location.hostname) || location.protocol === 'file:';</script>
 </head>
 <body>
     <header class="nav">
         <div class="nav-inner">
-            <a class="brand" href="/">
+            <a class="brand" href="./">
                 <span class="brand-dot" aria-hidden="true"></span>
                 <span class="brand-name">音乐弹珠</span>
                 <span class="brand-en">MUSIC MARBLES</span>
@@ -162,6 +163,6 @@
     </main>
 
     <div class="toast" id="toast"></div>
-    <script src="/scripts/landing.js"></script>
+    <script src="scripts/landing.js"></script>
 </body>
 </html>

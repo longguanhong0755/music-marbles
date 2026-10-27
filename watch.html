@@ -6,13 +6,14 @@
     <title>音乐弹珠</title>
     <meta name="description" content="音频生成的弹珠轨道。链接保留 10 分钟，可手动延长。">
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="/styles/reset.css">
-    <link rel="stylesheet" href="/styles/watch.css">
+    <link rel="stylesheet" href="styles/reset.css">
+    <link rel="stylesheet" href="styles/watch.css">
+    <script>window.MUSIC_MARBLES_STATIC = window.MUSIC_MARBLES_STATIC || /(^|\.)github\.io$/i.test(location.hostname) || location.protocol === 'file:';</script>
 </head>
 <body>
     <header class="topbar">
         <div class="topbar-inner">
-            <a class="brand" href="/">
+            <a class="brand" href="./">
                 <span class="brand-dot" aria-hidden="true"></span>
                 <span class="brand-name">音乐弹珠</span>
                 <span class="brand-en">MUSIC MARBLES</span>
@@ -23,7 +24,7 @@
             </div>
             <div class="top-actions">
                 <button class="icon-button" id="share-button" type="button" title="复制链接">分享</button>
-                <a class="icon-button" href="/" title="制作新的轨道">新建</a>
+                <a class="icon-button" href="./" title="制作新的轨道">新建</a>
             </div>
         </div>
     </header>
@@ -45,7 +46,7 @@
                     <p class="kicker">LINK EXPIRED</p>
                     <strong>链接已过期</strong>
                     <p id="expired-message">链接不存在，或内容已超过 10 分钟被删除。</p>
-                    <a class="primary-link" href="/">新建一条 →</a>
+                    <a class="primary-link" href="./">新建一条 →</a>
                 </div>
             </div>
         </div>
@@ -122,9 +123,9 @@
 
     <div class="toast" id="toast"></div>
 
-    <script src="/scripts/engine.js"></script>
-    <script src="/scripts/scene.js"></script>
-    <script src="/scripts/vendor/mp4-muxer.js"></script>
-    <script src="/scripts/watch.js"></script>
+    <script src="scripts/engine.js"></script>
+    <script src="scripts/scene.js"></script>
+    <script src="scripts/vendor/mp4-muxer.js"></script>
+    <script src="scripts/watch.js"></script>
 </body>
 </html>

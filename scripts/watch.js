@@ -34,7 +34,12 @@
     const export_download = document.getElementById('export-download');
     const toast_el = document.getElementById('toast');
 
-    const id = decodeURIComponent((location.pathname.split('/').filter(Boolean).pop() || ''));
+    const query_id = new URLSearchParams(location.search).get('id');
+    const path_id = location.pathname.includes('/watch/')
+        ? location.pathname.split('/').filter(Boolean).pop()
+        : '';
+    const id = decodeURIComponent(query_id || path_id || '');
+    const STATIC_HOST = !!window.MUSIC_MARBLES_STATIC;
     const MERGE_WINDOW_MS = 80;
     const INTRO_SECONDS = 1.0;
     const DIMS = {
@@ -74,6 +79,7 @@
     let expires_at = 0;
     let extend_busy = false;
     let seed = 1;
+    let static_mode = STATIC_HOST;
 
     play_button.disabled = true;
     download_button.disabled = true;
@@ -205,6 +211,33 @@
             }
         }
         return out;
+    }
+
+    async function load_static_track(track_id) {
+        const manifest_url = new URL('builtins/manifest.json', document.baseURI).href;
+        const manifest_resp = await fetch(manifest_url, {cache: 'no-store'});
+        if (!manifest_resp.ok) throw new Error('静态清单不可用');
+        const manifest = await manifest_resp.json();
+        const item = (manifest.tracks || []).find((t) => t.id === track_id);
+        if (!item) return null;
+
+        const notes_url = new URL(String(item.notes || '').replace(/^\//, ''), document.baseURI).href;
+        const audio_url = new URL(String(item.audio || '').replace(/^\//, ''), document.baseURI).href;
+        const notes_resp = await fetch(notes_url, {cache: 'no-store'});
+        if (!notes_resp.ok) throw new Error('音符读取失败');
+        const notes = await notes_resp.json();
+
+        return {
+            id: track_id,
+            title: item.title,
+            subtitle: item.subtitle,
+            duration: item.duration,
+            audioUrl: audio_url,
+            notes: notes.notes,
+            builtin: true,
+            permanent: true,
+            expiresAt: null
+        };
     }
 
     function prepare_engine() {
@@ -542,6 +575,18 @@
 
     async function upload_export(blob, ext, ratio, offline) {
         if (!blob || !blob.size) throw new Error('导出结果为空，请重试。');
+
+        if (static_mode) {
+            if (export_url && export_url.startsWith('blob:')) URL.revokeObjectURL(export_url);
+            export_url = URL.createObjectURL(blob);
+            export_name = `${data.title || 'music-marbles'}-${ratio}.${ext}`;
+            export_download.textContent = `下载 ${ext.toLowerCase() === 'mp4' ? 'MP4' : 'WEBM'}`;
+            set_export_progress(1);
+            set_export_status('演示版已在浏览器内生成，点击下方按钮下载。');
+            export_download.classList.remove('hidden');
+            return;
+        }
+
         set_export_status(offline ? '正在封装音频与 MP4…' : '正在上传并转换为 MP4…');
         set_export_progress(0.99);
 
@@ -567,13 +612,20 @@
 
     function choose_mime() {
         if (typeof MediaRecorder === 'undefined') return '';
-        const candidates = [
-            'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-            'video/mp4',
-            'video/webm;codecs=vp9,opus',
-            'video/webm;codecs=vp8,opus',
-            'video/webm'
-        ];
+        const candidates = static_mode
+            ? [
+                'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+                'video/webm;codecs=vp9,opus',
+                'video/webm;codecs=vp8,opus',
+                'video/webm'
+            ]
+            : [
+                'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+                'video/mp4',
+                'video/webm;codecs=vp9,opus',
+                'video/webm;codecs=vp8,opus',
+                'video/webm'
+            ];
         for (const mime of candidates) {
             try {
                 if (MediaRecorder.isTypeSupported(mime)) return mime;
@@ -606,7 +658,7 @@
         let recorder = null;
         let export_source = null;
         try {
-            const codec = await pick_offline_codec(dims[0], dims[1]);
+            const codec = static_mode ? '' : await pick_offline_codec(dims[0], dims[1]);
             if (codec) {
                 let blob = null;
                 try {
@@ -758,8 +810,10 @@
             mode = 'paused';
             set_play_ui();
         }
+        if (export_url && export_url.startsWith('blob:')) URL.revokeObjectURL(export_url);
         export_url = '';
         export_name = '';
+        export_download.textContent = '下载 MP4';
         export_download.classList.add('hidden');
         export_status.textContent = '';
         export_status.classList.remove('error');
@@ -839,13 +893,26 @@
         }
 
         try {
-            const resp = await fetch(`/api/tracks/${encodeURIComponent(id)}`);
-            if (resp.status === 404) {
+            if (!STATIC_HOST) {
+                const resp = await fetch(`/api/tracks/${encodeURIComponent(id)}`);
+                if (resp.ok) data = await resp.json();
+                else if (resp.status !== 404) throw new Error('请求失败');
+            }
+
+            if (!data && (STATIC_HOST || id.startsWith('builtin-'))) {
+                if (!id.startsWith('builtin-')) {
+                    show_error('静态演示只有内置曲目；上传与分享链接需要本地运行 Node 服务。');
+                    return;
+                }
+                data = await load_static_track(id);
+                static_mode = true;
+            }
+
+            if (!data) {
                 show_expired('链接不存在，或内容已超过 10 分钟被删除。');
                 return;
             }
-            if (!resp.ok) throw new Error('请求失败');
-            data = await resp.json();
+
             title_el.textContent = data.title || '音乐弹珠';
             document.title = `${data.title || '音乐弹珠'} — 音乐弹珠`;
             track = merge_notes(data.notes || []);
@@ -857,6 +924,16 @@
             scene.reset();
             scene.draw();
             update_progress();
+
+            if (static_mode) {
+                track_status.textContent = '静态演示 · 内置曲目';
+                const foot = document.querySelector('.watch-foot span:last-child');
+                if (foot) foot.textContent = 'GitHub Pages 静态演示 · 内置曲目可播放与导出';
+                const modal_copy = document.querySelector('.modal-copy');
+                if (modal_copy) modal_copy.textContent = '选择画面比例。静态演示会在浏览器内实时录制并直接下载，导出保留音频。';
+                const modal_foot = document.querySelector('.modal-foot');
+                if (modal_foot) modal_foot.textContent = '演示版直接下载 · 格式取决于浏览器';
+            }
 
             if (data.permanent) {
                 expiry_label.textContent = '内置曲目';

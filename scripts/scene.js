@@ -16,8 +16,8 @@
         marble: new Image(),
         particle: new Image()
     };
-    images.marble.src = '/images/marble.png';
-    images.particle.src = '/images/particle.png';
+    images.marble.src = new URL('images/marble.png', document.baseURI).href;
+    images.particle.src = new URL('images/particle.png', document.baseURI).href;
 
     function load_images() {
         const wait = (img) => new Promise((resolve) => {

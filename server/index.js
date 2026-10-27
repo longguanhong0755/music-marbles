@@ -465,7 +465,7 @@ app.post('/api/tracks', audioUpload.single('audio'), async (req, res, next) => {
             id,
             title,
             duration,
-            watchUrl: `${base}/watch/${id}`,
+            watchUrl: `${base}/watch.html?id=${encodeURIComponent(id)}`,
             audioUrl: `/media/${id}/audio`,
             expiresAt: now + CONTENT_TTL_MS,
             ttlSeconds: CONTENT_TTL_MS / 1000
@@ -607,7 +607,10 @@ app.use('/vendor', express.static(path.join(ROOT, 'vendor'), {maxAge: '1d'}));
 app.use('/builtins', express.static(BUILTINS, {maxAge: '1h'}));
 
 app.get('/', (req, res) => res.sendFile(path.join(ROOT, 'index.html')));
-app.get('/watch/:id', (req, res) => res.sendFile(path.join(ROOT, 'watch.html')));
+app.get('/watch.html', (req, res) => res.sendFile(path.join(ROOT, 'watch.html')));
+app.get('/watch/:id', (req, res) => {
+    res.redirect(302, `/watch.html?id=${encodeURIComponent(req.params.id)}`);
+});
 
 app.use((err, req, res, next) => {
     console.error(err);

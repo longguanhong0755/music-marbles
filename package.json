@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "把音频变成可分享的弹珠轨道，支持四种画幅的 MP4 导出。",
   "main": "server/index.js",
+  "homepage": "https://longguanhong0755.github.io/music-marbles/",
   "repository": {
     "type": "git",
     "url": "https://github.com/longguanhong0755/music-marbles.git"

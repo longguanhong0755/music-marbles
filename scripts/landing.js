@@ -33,14 +33,28 @@
     const MAX_SECONDS = 360;
     const MAX_BARS = 1000;
     const MERGE_MS = 80;
+    const STATIC_MODE = !!window.MUSIC_MARBLES_STATIC;
 
     let selected_file = null;
     let selected_builtin = null;
     let builtins = [];
     let busy = false;
+    let static_demo = STATIC_MODE;
     let preview_audio = null;
     let preview_button = null;
     let toast_timer = 0;
+
+    function asset_url(path) {
+        return new URL(String(path || '').replace(/^\//, ''), document.baseURI).href;
+    }
+
+    function normalize_track(track) {
+        return {
+            ...track,
+            audio: asset_url(track.audio),
+            notes: asset_url(track.notes)
+        };
+    }
 
     function toast(text) {
         toast_el.textContent = text;
@@ -105,6 +119,10 @@
 
     function set_file(file) {
         if (!file) return;
+        if (static_demo) {
+            toast('静态演示只支持内置曲目；上传请本地运行 npm start。');
+            return;
+        }
         const name = file.name || 'audio';
         const ext = name.split('.').pop().toLowerCase();
         if (!['mp3', 'wav', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'flac'].includes(ext)) {
@@ -157,7 +175,7 @@
     }
 
     function render_builtins(tracks) {
-        builtins = tracks || [];
+        builtins = (tracks || []).map(normalize_track);
         builtin_list.innerHTML = '';
         if (!builtins.length) {
             builtin_list.innerHTML = '<p class="builtin-copy">没有可用的内置曲目。</p>';
@@ -269,7 +287,7 @@
         return new Promise((resolve, reject) => {
             let worker;
             try {
-                worker = new Worker('/scripts/onset-worker.js');
+                worker = new Worker(new URL('scripts/onset-worker.js', document.baseURI).href);
             } catch (err) {
                 reject(new Error('音符识别线程无法启动。'));
                 return;
@@ -414,6 +432,10 @@
     async function generate_from_file() {
         const file = selected_file;
         if (!file) return;
+        if (static_demo) {
+            show_error('GitHub Pages 是静态演示，上传与分享链接需要本地运行 Node 服务。');
+            return;
+        }
         set_busy(true);
         clear_error();
         result.classList.add('hidden');
@@ -486,7 +508,7 @@
     function generate_from_builtin() {
         const track = selected_builtin;
         if (!track) return;
-        const url = `${location.origin}/watch/${encodeURIComponent(track.id)}`;
+        const url = new URL(`watch.html?id=${encodeURIComponent(track.id)}`, document.baseURI).href;
         show_result(url, track.title, null, true);
         toast('内置曲目的链接已生成。');
     }
@@ -557,10 +579,40 @@
     });
     start_over.addEventListener('click', reset_all);
 
-    fetch('/api/builtins')
-        .then((r) => r.json())
-        .then((data) => render_builtins(data.tracks || []))
-        .catch(() => {
-            builtin_list.innerHTML = '<p class="builtin-copy">内置曲目暂不可用，请上传文件。</p>';
-        });
+    function mark_static_demo() {
+        static_demo = true;
+        drop_sub.textContent = '静态演示只支持内置曲目 · 上传需本地运行';
+        const copy = document.querySelector('.builtin-copy');
+        if (copy) {
+            copy.textContent = 'GitHub Pages 静态演示。三首公版作品可直接播放与导出；上传与 10 分钟链接需本地运行 Node 服务。';
+        }
+    }
+
+    async function load_builtins() {
+        let api_status = 0;
+        if (!STATIC_MODE) {
+            try {
+                const resp = await fetch('/api/builtins', {cache: 'no-store'});
+                api_status = resp.status;
+                if (!resp.ok) throw new Error('API 不可用');
+                const data = await resp.json();
+                render_builtins(data.tracks || []);
+                return;
+            } catch (err) {
+                // 静态托管没有后端，继续读同目录下的清单。
+            }
+        }
+
+        try {
+            const resp = await fetch(new URL('builtins/manifest.json', document.baseURI).href, {cache: 'no-store'});
+            if (!resp.ok) throw new Error('静态清单不可用');
+            const data = await resp.json();
+            if (STATIC_MODE || api_status === 404 || api_status === 0) mark_static_demo();
+            render_builtins(data.tracks || []);
+        } catch (err) {
+            builtin_list.innerHTML = '<p class="builtin-copy">内置曲目暂不可用。</p>';
+        }
+    }
+
+    load_builtins();
 })();
