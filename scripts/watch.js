@@ -1065,7 +1065,15 @@
         try {
             const codec_info = await pick_offline_codec(dims[0], dims[1], true);
             const audio_config = static_mode && codec_info ? await pick_offline_audio() : null;
-            const offline_ready = !!codec_info && (!static_mode || !!audio_config);
+            // If the browser can only encode Opus but MediaRecorder can record
+            // AAC, prefer the recorder. QuickTime and Safari play AAC but treat
+            // Opus-in-MP4 as silent video. This is the compatibility path for
+            // browsers without an AAC AudioEncoder.
+            const prefer_recorder_audio = static_mode
+                && !!audio_config
+                && audio_config.muxer_codec === 'opus'
+                && mime.indexOf('mp4a') >= 0;
+            const offline_ready = !!codec_info && (!static_mode || !!audio_config) && !prefer_recorder_audio;
             if (offline_ready) {
                 let blob = null;
                 try {
@@ -1091,7 +1099,7 @@
             if (audio_ctx.state !== 'running') {
                 throw new Error('浏览器阻止了音频播放，请点击页面后重新导出。');
             }
-            set_export_status(`正在实时录制 ${ratio.replace('x', ':')} · 请保持页面在前台…`);
+            set_export_status(`正在实时录制 ${ratio.replace('x', ':')}${prefer_recorder_audio ? ' · AAC 音频兼容模式' : ''} · 请保持页面在前台…`);
             set_export_progress(0);
 
             const [w, h] = dims;
