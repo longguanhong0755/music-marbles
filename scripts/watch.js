@@ -34,6 +34,7 @@
     const export_preview_wrap = document.getElementById('export-preview-wrap');
     const export_preview = document.getElementById('export-preview');
     const export_download = document.getElementById('export-download');
+    const export_foot = document.getElementById('export-foot');
     const toast_el = document.getElementById('toast');
 
     const page_query = new URLSearchParams(location.search);
@@ -57,10 +58,18 @@
     const OFFLINE_FPS = 30;
     const OFFLINE_BITRATE = 6_000_000;
     const OFFLINE_CODECS = ['avc1.640028', 'avc1.4D4028', 'avc1.42E028', 'avc1.42002A'];
+    const OFFLINE_AUDIO = {
+        codec: 'opus',
+        sampleRate: 48000,
+        numberOfChannels: 2,
+        bitrate: 160_000
+    };
     const OFFLINE_READY = typeof window.VideoEncoder === 'function'
         && typeof window.VideoFrame === 'function'
         && window.Mp4Muxer
         && typeof window.Mp4Muxer.Muxer === 'function';
+    const OFFLINE_AUDIO_READY = typeof window.AudioEncoder === 'function'
+        && typeof window.AudioData === 'function';
 
     let data = null;
     let track = [];
@@ -70,6 +79,9 @@
     let audio_buffer = null;
     let output_gain = null;
     let source = null;
+    let fallback_audio = null;
+    let fallback_timer = 0;
+    let using_fallback = false;
     let mode = 'loading';
     let paused_from = null;
     let clock_origin = 0;
@@ -312,12 +324,75 @@
         scene.draw();
     }
 
+    function stop_fallback_timer() {
+        if (fallback_timer) {
+            clearTimeout(fallback_timer);
+            fallback_timer = 0;
+        }
+    }
+
     function stop_source() {
+        stop_fallback_timer();
+        if (fallback_audio) {
+            fallback_audio.pause();
+            using_fallback = false;
+        }
         if (!source) return;
         source.onended = null;
         try { source.stop(); } catch (err) { /* 已经停止 */ }
         try { source.disconnect(); } catch (err) { /* 忽略 */ }
         source = null;
+    }
+
+    // When WebAudio stays suspended (strict autoplay policy, no output device,
+    // iOS interruption) a plain <audio> element still goes through the media
+    // pipeline and actually makes sound. It follows the same visual clock:
+    // play muted through the 1 s intro, then restart at song time zero and
+    // unmute. This is the safety net for "视频在动但没有声音".
+    function play_element_from(elapsed) {
+        if (!fallback_audio) return false;
+        const t = Math.max(0, Number(elapsed) || 0);
+        const song_offset = t - INTRO_SECONDS;
+        const duration = Number(fallback_audio.duration) || (audio_buffer && audio_buffer.duration) || 0;
+        if (duration && song_offset >= duration) return false;
+
+        stop_source();
+        using_fallback = true;
+        fallback_audio.muted = true;
+        try { fallback_audio.currentTime = 0; } catch (err) { /* 元数据还没到 */ }
+        const started = fallback_audio.play();
+        if (started && typeof started.catch === 'function') started.catch(() => {});
+
+        if (t < INTRO_SECONDS) {
+            fallback_timer = setTimeout(() => {
+                fallback_timer = 0;
+                if (!using_fallback || (mode !== 'intro' && mode !== 'playing')) return;
+                try { fallback_audio.currentTime = 0; } catch (err) { /* 忽略 */ }
+                fallback_audio.muted = muted;
+                const again = fallback_audio.play();
+                if (again && typeof again.catch === 'function') again.catch(() => {});
+            }, Math.max(0, (INTRO_SECONDS - t) * 1000));
+        } else {
+            try { fallback_audio.currentTime = Math.max(0, song_offset); } catch (err) { /* 忽略 */ }
+            fallback_audio.muted = muted;
+        }
+        return true;
+    }
+
+    function prime_fallback_audio() {
+        if (!fallback_audio || using_fallback || !fallback_audio.paused) return;
+        const was_muted = fallback_audio.muted;
+        fallback_audio.muted = true;
+        let started;
+        try { started = fallback_audio.play(); } catch (err) { return; }
+        if (started && typeof started.then === 'function') {
+            started.then(() => {
+                if (using_fallback) return;
+                fallback_audio.pause();
+                try { fallback_audio.currentTime = 0; } catch (err) { /* 忽略 */ }
+                fallback_audio.muted = was_muted;
+            }).catch(() => { fallback_audio.muted = was_muted; });
+        }
     }
 
     // The watch timeline is driven by performance.now(), not by the audio
@@ -371,14 +446,28 @@
     }
 
     function sync_audio_to_visual() {
-        if (!audio_ctx || !audio_buffer) return;
+        if (!audio_ctx || !audio_buffer) {
+            play_element_from(elapsed_seconds());
+            return;
+        }
         if (audio_ctx.state === 'running') {
             play_audio_from(elapsed_seconds());
             return;
         }
-        resume_audio_with_timeout(1500).then((ok) => {
-            if (ok && (mode === 'intro' || mode === 'playing')) {
+        // A previous attempt already gave up on WebAudio. Do not wait another
+        // 1.5 s on every resume; keep using the element that is making sound.
+        if (using_fallback) {
+            play_element_from(elapsed_seconds());
+            return;
+        }
+        // Short deadline: the fallback element needs to start during the 1 s
+        // muted intro, otherwise it would join the song half a second late.
+        resume_audio_with_timeout(400).then((ok) => {
+            if (mode !== 'intro' && mode !== 'playing') return;
+            if (ok && audio_ctx.state === 'running') {
                 play_audio_from(elapsed_seconds());
+            } else {
+                play_element_from(elapsed_seconds());
             }
         });
     }
@@ -434,7 +523,12 @@
         if (mode === 'intro' || mode === 'playing') {
             paused_from = mode;
             pause_clock();
-            audio_ctx.suspend();
+            stop_fallback_timer();
+            if (fallback_audio) fallback_audio.pause();
+            if (audio_ctx && audio_ctx.state === 'running') {
+                const paused = audio_ctx.suspend();
+                if (paused && typeof paused.catch === 'function') paused.catch(() => {});
+            }
             mode = 'paused';
             set_play_ui();
         }
@@ -442,14 +536,23 @@
 
     function restart_run() {
         if (exporting || mode === 'expired' || mode === 'loading') return;
-        if (audio_ctx && mode === 'paused') audio_ctx.resume();
+        if (audio_ctx && mode === 'paused' && audio_ctx.state !== 'running') {
+            const resumed = audio_ctx.resume();
+            if (resumed && typeof resumed.catch === 'function') resumed.catch(() => {});
+        }
         start_run();
     }
 
     function toggle_mute() {
-        if (!audio_ctx || mode === 'expired') return;
+        if ((!audio_ctx && !fallback_audio) || mode === 'expired') return;
         muted = !muted;
-        if (output_gain) output_gain.gain.setTargetAtTime(muted ? 0 : 1, audio_ctx.currentTime, 0.02);
+        if (output_gain && audio_ctx) {
+            output_gain.gain.setTargetAtTime(muted ? 0 : 1, audio_ctx.currentTime, 0.02);
+        }
+        if (fallback_audio && using_fallback) {
+            // 开场 1 秒画面里不应该漏出歌曲开头。
+            fallback_audio.muted = muted || elapsed_seconds() < INTRO_SECONDS;
+        }
         sound_icon.classList.toggle('muted', muted);
         mute_button.title = muted ? '取消静音' : '静音';
     }
@@ -505,16 +608,65 @@
         }
     }
 
+    function unlock_audio() {
+        if (!audio_ctx && !fallback_audio) return;
+        if (audio_ctx && audio_ctx.state === 'running') {
+            document.removeEventListener('pointerdown', unlock_audio, true);
+            document.removeEventListener('keydown', unlock_audio, true);
+            return;
+        }
+        if (audio_ctx) {
+            try {
+                const resumed = audio_ctx.resume();
+                if (resumed && typeof resumed.catch === 'function') resumed.catch(() => {});
+            } catch (err) { /* 下一次手势再试 */ }
+        }
+        prime_fallback_audio();
+    }
+
     async function load_audio() {
         audio_ctx = new (window.AudioContext || window.webkitAudioContext)();
         output_gain = audio_ctx.createGain();
         output_gain.gain.value = muted ? 0 : 1;
         output_gain.connect(audio_ctx.destination);
+        // A suspended context can recover after the first tap/click. When it
+        // does, join the run at the current visual position. If the fallback
+        // element already took over, do not double-play.
+        audio_ctx.addEventListener('statechange', () => {
+            if (using_fallback) return;
+            if (audio_ctx.state === 'running' && !source && (mode === 'intro' || mode === 'playing')) {
+                play_audio_from(elapsed_seconds());
+            }
+        });
+        document.addEventListener('pointerdown', unlock_audio, true);
+        document.addEventListener('keydown', unlock_audio, true);
 
         const resp = await fetch(data.audioUrl, {cache: 'force-cache'});
         if (!resp.ok) throw new Error('音频读取失败');
         const arr = await resp.arrayBuffer();
         audio_buffer = await audio_ctx.decodeAudioData(arr);
+
+        fallback_audio = new Audio(data.audioUrl);
+        fallback_audio.preload = 'auto';
+        fallback_audio.muted = true;
+        fallback_audio.addEventListener('ended', () => {
+            if (mode === 'playing') finish_run();
+        });
+        await new Promise((resolve) => {
+            if (fallback_audio.readyState >= 1) {
+                resolve();
+                return;
+            }
+            let settled = false;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                resolve();
+            };
+            fallback_audio.addEventListener('loadedmetadata', finish, {once: true});
+            fallback_audio.addEventListener('error', finish, {once: true});
+            setTimeout(finish, 4000);
+        });
     }
 
     function set_export_status(text, error) {
@@ -555,25 +707,114 @@
         });
     }
 
-    async function pick_offline_codec(width, height) {
-        if (!OFFLINE_READY) return '';
+    // Hardware H.264 at 1080p is several times faster than real time. Software
+    // H.264 is often SLOWER than real time once canvas readback and muxing are
+    // counted, which made "fast export" take minutes on long tracks. Prefer
+    // hardware; report software separately so the caller can decide.
+    async function pick_offline_codec(width, height, allow_software) {
+        if (!OFFLINE_READY) return null;
+        const base = {
+            width,
+            height,
+            bitrate: OFFLINE_BITRATE,
+            framerate: OFFLINE_FPS
+        };
         for (const codec of OFFLINE_CODECS) {
             try {
                 const support = await VideoEncoder.isConfigSupported({
+                    ...base,
                     codec,
-                    width,
-                    height,
-                    bitrate: OFFLINE_BITRATE,
-                    framerate: OFFLINE_FPS,
                     hardwareAcceleration: 'prefer-hardware'
                 });
-                if (support && support.supported) return codec;
+                if (support && support.supported) return {codec, hardware: true};
             } catch (err) { /* 尝试下一个编码器 */ }
         }
-        return '';
+        if (!allow_software) return null;
+        for (const codec of OFFLINE_CODECS) {
+            try {
+                const support = await VideoEncoder.isConfigSupported({...base, codec});
+                if (support && support.supported) return {codec, hardware: false};
+            } catch (err) { /* 尝试下一个编码器 */ }
+        }
+        return null;
     }
 
-    async function render_offline(ratio, dims, codec) {
+    // Static hosting has no server to mux the original track back in, so the
+    // browser has to encode audio as well. Opus-in-MP4 plays in Chrome/Edge;
+    // browsers that cannot handle it fall back to MediaRecorder instead.
+    async function pick_offline_audio() {
+        if (!OFFLINE_AUDIO_READY) return null;
+        try {
+            const probe = document.createElement('video');
+            const can_play = probe.canPlayType('video/mp4; codecs="avc1.640028,opus"');
+            if (!can_play) return null;
+            const support = await AudioEncoder.isConfigSupported(OFFLINE_AUDIO);
+            return support && support.supported ? {...OFFLINE_AUDIO} : null;
+        } catch (err) {
+            return null;
+        }
+    }
+
+    async function encode_export_audio(muxer, config, duration) {
+        if (!audio_buffer) throw new Error('音频还没有加载');
+        const music = Math.max(0, Math.min(duration, audio_buffer.duration));
+        const channels = config.numberOfChannels;
+        const rate = config.sampleRate;
+        const frames = Math.max(1, Math.ceil((INTRO_SECONDS + music) * rate));
+
+        // Resample and prepend the same 1 s silent intro the scene uses, so
+        // the muxed audio lines up with frame zero.
+        const offline = new OfflineAudioContext(channels, frames, rate);
+        const src = offline.createBufferSource();
+        src.buffer = audio_buffer;
+        src.connect(offline.destination);
+        src.start(INTRO_SECONDS, 0, music);
+        const rendered = await offline.startRendering();
+
+        let failure = null;
+        const encoder = new AudioEncoder({
+            output: (chunk, meta) => {
+                if (failure) return;
+                try {
+                    muxer.addAudioChunk(chunk, meta);
+                } catch (err) {
+                    failure = err;
+                }
+            },
+            error: (err) => { failure = err; }
+        });
+        try {
+            encoder.configure(config);
+            const left = rendered.getChannelData(0);
+            const right = rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : left;
+            const block = 4800; // 100 ms
+            for (let offset = 0; offset < rendered.length; offset += block) {
+                if (failure) throw failure;
+                const n = Math.min(block, rendered.length - offset);
+                const planar = new Float32Array(n * channels);
+                planar.set(left.subarray(offset, offset + n), 0);
+                if (channels > 1) planar.set(right.subarray(offset, offset + n), n);
+                const frame = new AudioData({
+                    format: 'f32-planar',
+                    sampleRate: rate,
+                    numberOfFrames: n,
+                    numberOfChannels: channels,
+                    timestamp: Math.round(offset * 1_000_000 / rate),
+                    data: planar
+                });
+                encoder.encode(frame);
+                frame.close();
+            }
+            await encoder.flush();
+            if (failure) throw failure;
+        } finally {
+            if (encoder.state !== 'closed') {
+                try { encoder.close(); } catch (err) { /* 忽略 */ }
+            }
+        }
+    }
+
+    async function render_offline(ratio, dims, codec, audio_config, hardware) {
         const [w, h] = dims;
         const canvas = document.createElement('canvas');
         canvas.width = w;
@@ -589,11 +830,19 @@
         const total = INTRO_SECONDS + duration + EXPORT_TAIL_SECONDS;
         const frames = Math.max(1, Math.ceil(total * OFFLINE_FPS));
         const target = new window.Mp4Muxer.ArrayBufferTarget();
-        const muxer = new window.Mp4Muxer.Muxer({
+        const muxer_options = {
             target,
             video: {codec: 'avc', width: w, height: h, frameRate: OFFLINE_FPS},
             fastStart: false
-        });
+        };
+        if (audio_config) {
+            muxer_options.audio = {
+                codec: 'opus',
+                sampleRate: audio_config.sampleRate,
+                numberOfChannels: audio_config.numberOfChannels
+            };
+        }
+        const muxer = new window.Mp4Muxer.Muxer(muxer_options);
 
         let failure = null;
         const encoder = new VideoEncoder({
@@ -608,16 +857,22 @@
             error: (err) => { failure = err; }
         });
         try {
-            encoder.configure({
+            const encoder_config = {
                 codec,
                 width: w,
                 height: h,
                 bitrate: OFFLINE_BITRATE,
-                framerate: OFFLINE_FPS,
-                hardwareAcceleration: 'prefer-hardware'
-            });
+                framerate: OFFLINE_FPS
+            };
+            if (hardware) encoder_config.hardwareAcceleration = 'prefer-hardware';
+            encoder.configure(encoder_config);
         } catch (err) {
             throw new Error(`视频编码器启动失败：${err.message || err}`);
+        }
+
+        if (audio_config) {
+            await encode_export_audio(muxer, audio_config, duration);
+            if (failure) throw failure;
         }
 
         const eint = API.get_intro();
@@ -650,10 +905,11 @@
                     escene.draw();
                 }
 
-                const frame = new VideoFrame(canvas, {
+                const stamp = {
                     timestamp: Math.round(i * 1_000_000 / OFFLINE_FPS),
                     duration: Math.round(1_000_000 / OFFLINE_FPS)
-                });
+                };
+                const frame = new VideoFrame(canvas, stamp);
                 encoder.encode(frame, {keyFrame: i % (OFFLINE_FPS * 2) === 0});
                 frame.close();
 
@@ -724,6 +980,7 @@
         const candidates = static_mode
             ? [
                 'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+                'video/mp4',
                 'video/webm;codecs=vp9,opus',
                 'video/webm;codecs=vp8,opus',
                 'video/webm'
@@ -768,13 +1025,15 @@
         let recorder = null;
         let export_source = null;
         try {
-            const codec = static_mode ? '' : await pick_offline_codec(dims[0], dims[1]);
-            if (codec) {
+            const codec_info = await pick_offline_codec(dims[0], dims[1], true);
+            const audio_config = static_mode && codec_info ? await pick_offline_audio() : null;
+            const offline_ready = !!codec_info && (!static_mode || !!audio_config);
+            if (offline_ready) {
                 let blob = null;
                 try {
-                    set_export_status(`正在离线渲染 ${ratio.replace('x', ':')} · 速度优先…`);
+                    set_export_status(`正在离线渲染 ${ratio.replace('x', ':')} · ${codec_info.hardware ? '硬件加速' : '软件编码'}…`);
                     set_export_progress(0);
-                    blob = await render_offline(ratio, dims, codec);
+                    blob = await render_offline(ratio, dims, codec_info.codec, audio_config, codec_info.hardware);
                 } catch (err) {
                     console.warn('离线导出失败，回退到实时录制：', err);
                     set_export_status('离线渲染不可用，正在实时录制…');
@@ -801,7 +1060,10 @@
             export_canvas = document.createElement('canvas');
             export_canvas.width = w;
             export_canvas.height = h;
-            export_canvas.style.cssText = `position:fixed;left:-10000px;top:0;width:${w}px;height:${h}px;`;
+            // Keep the canvas on-screen (a 2 px dot under the modal). An
+            // off-screen canvas is not composited in some browsers, so
+            // captureStream produced audio-only recordings.
+            export_canvas.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;z-index:29;pointer-events:none;';
             document.body.appendChild(export_canvas);
 
             prepare_engine();
@@ -818,7 +1080,10 @@
             export_source.connect(egain);
             egain.connect(dest);
 
-            const video_stream = export_canvas.captureStream(30);
+            // Manual frame capture: on-screen auto-capture was throttled to a
+            // few frames per second in some browsers, producing near-still
+            // videos. Request one frame after every draw instead.
+            const video_stream = export_canvas.captureStream(0);
             const video_track = video_stream.getVideoTracks()[0];
             // The export canvas sits offscreen, and some browsers then throttle
             // automatic capture to zero frames. requestFrame() after each draw
@@ -838,6 +1103,9 @@
                 audioBitsPerSecond: 128_000
             });
             recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+            // isTypeSupported() is a hint; the recorder may fall back to a
+            // different container. Name the file after what was actually made.
+            const recorded_mime = recorder.mimeType || mime;
             const stopped = new Promise((resolve) => { recorder.onstop = resolve; });
 
             const eint = API.get_intro();
@@ -898,10 +1166,10 @@
             await stopped;
             video_stream.getTracks().forEach((tr) => tr.stop());
 
-            const blob = new Blob(chunks, {type: mime.split(';')[0] || 'video/webm'});
+            const blob = new Blob(chunks, {type: recorded_mime.split(';')[0] || 'video/webm'});
             if (!blob.size) throw new Error('录制结果为空，请重试。');
             dest.stream.getTracks().forEach((tr) => tr.stop());
-            await upload_export(blob, mime.indexOf('mp4') >= 0 ? 'mp4' : 'webm', ratio, false);
+            await upload_export(blob, recorded_mime.indexOf('mp4') >= 0 ? 'mp4' : 'webm', ratio, false);
         } catch (err) {
             console.error(err);
             set_export_status(err.message || '导出失败', true);
@@ -1014,6 +1282,9 @@
     }
 
     async function init() {
+        if (export_foot && static_mode) {
+            export_foot.textContent = 'MP4 / WebM · 1080p · 30 fps';
+        }
         seed = hash_id(id || 'music-marbles');
         if (!id) {
             show_expired('这条链接里没有轨道编号。');
@@ -1063,9 +1334,9 @@
                 const foot = document.querySelector('.watch-foot span:last-child');
                 if (foot) foot.textContent = 'GitHub Pages 静态演示 · 内置曲目可播放与导出';
                 const modal_copy = document.querySelector('.modal-copy');
-                if (modal_copy) modal_copy.textContent = '选择画面比例。静态演示会在浏览器内实时录制并直接下载，导出保留音频。';
+                if (modal_copy) modal_copy.textContent = '选择画面比例。支持硬件编码时会在浏览器内离线渲染，明显快于实时录制；没有硬件编码时也能完整导出。导出保留音频。';
                 const modal_foot = document.querySelector('.modal-foot');
-                if (modal_foot) modal_foot.textContent = '演示版直接下载 · 格式取决于浏览器';
+                if (modal_foot) modal_foot.textContent = '演示版直接下载 · MP4 / WebM 取决于浏览器';
             }
 
             if (data.permanent) {

@@ -132,7 +132,7 @@
                     <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
                 </button>
             </div>
-            <p class="modal-copy">选择画面比例。支持时会在后台离线渲染，速度比实时录制更快；否则自动回退为实时录制。导出的文件同样保留 10 分钟。</p>
+            <p class="modal-copy">选择画面比例。支持硬件编码时会在浏览器内离线渲染，明显快于实时录制；没有硬件编码时也能完整导出。文件同样保留 10 分钟。</p>
             <div class="ratio-grid" id="ratio-grid">
                 <button class="ratio-card" data-ratio="9x16" type="button">
                     <span class="ratio-shape portrait"></span>
@@ -161,7 +161,7 @@
                 <video id="export-preview" controls playsinline webkit-playsinline preload="metadata"></video>
             </div>
             <button class="primary-button hidden" id="export-download" type="button">下载 MP4</button>
-            <p class="modal-foot">MP4 · H.264 + AAC · 1080p · 30 fps</p>
+            <p class="modal-foot" id="export-foot">MP4 · H.264 + AAC · 1080p · 30 fps</p>
         </div>
     </div>
 
