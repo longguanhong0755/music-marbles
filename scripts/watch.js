@@ -9,6 +9,7 @@
     const track_status = document.getElementById('track-status');
     const overlay = document.getElementById('play-overlay');
     const play_button = document.getElementById('play-button');
+    const audio_help = document.getElementById('audio-help');
     const play_label = play_button.querySelector('.play-label');
     const play_sub = play_button.querySelector('.play-sub');
     const expired_overlay = document.getElementById('expired-overlay');
@@ -90,10 +91,14 @@
     let audio_ctx = null;
     let audio_buffer = null;
     let output_gain = null;
+    let output_analyser = null;
     let source = null;
     let fallback_audio = null;
     let fallback_timer = 0;
     let using_fallback = false;
+    let intro_skipped = false;
+    let audio_prompt_el = null;
+    let audio_check_timer = 0;
     let mode = 'loading';
     let paused_from = null;
     let clock_origin = 0;
@@ -178,9 +183,11 @@
     function update_progress() {
         const elapsed = current_visual_seconds();
         const total = total_seconds();
-        const pct = total > 0 ? Math.min(1, Math.max(0, elapsed / total)) : 0;
+        const shown_elapsed = intro_skipped ? Math.max(0, elapsed - INTRO_SECONDS) : elapsed;
+        const shown_total = intro_skipped ? Math.max(0, total - INTRO_SECONDS) : total;
+        const pct = shown_total > 0 ? Math.min(1, Math.max(0, shown_elapsed / shown_total)) : 0;
         progress_fill.style.width = `${pct * 100}%`;
-        time_label.textContent = `${fmt(elapsed)} / ${fmt(total)}`;
+        time_label.textContent = `${fmt(shown_elapsed)} / ${fmt(shown_total)}`;
     }
 
     function set_play_ui() {
@@ -223,6 +230,8 @@
 
     function show_expired(message) {
         stop_source();
+        stop_audio_watchdog();
+        dismiss_audio_prompt();
         stop_clock();
         if (audio_ctx && audio_ctx.state === 'running') audio_ctx.suspend().catch(() => {});
         mode = 'expired';
@@ -407,6 +416,80 @@
         }
     }
 
+    function stop_audio_watchdog() {
+        if (audio_check_timer) {
+            clearTimeout(audio_check_timer);
+            audio_check_timer = 0;
+        }
+    }
+
+    function dismiss_audio_prompt() {
+        if (audio_prompt_el) {
+            audio_prompt_el.remove();
+            audio_prompt_el = null;
+        }
+    }
+
+    // Last-resort escape hatch. If WebAudio is running but delivering zeros,
+    // or the media element was left paused/muted by an autoplay policy, give
+    // the user a button that starts the native media path inside a fresh click.
+    function show_audio_prompt() {
+        if (audio_prompt_el || mode === 'paused' || mode === 'finished' || mode === 'expired') return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = 'audio-prompt';
+        btn.textContent = '没有声音？点这里切换播放';
+        btn.title = '如果仍无声，请检查系统音量、浏览器标签页是否静音；iPhone 请关闭静音键。';
+        btn.style.cssText = 'position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:100000;'
+            + 'border:0;border-radius:999px;padding:13px 20px;background:#111;color:#fff;'
+            + 'font:600 13px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;'
+            + 'box-shadow:0 12px 34px rgba(0,0,0,.35);cursor:pointer;';
+        btn.addEventListener('click', () => {
+            dismiss_audio_prompt();
+            if (audio_ctx && audio_ctx.state !== 'running') {
+                try {
+                    const resumed = audio_ctx.resume();
+                    if (resumed && typeof resumed.catch === 'function') resumed.catch(() => {});
+                } catch (err) { /* 忽略 */ }
+            }
+            play_element_from(elapsed_seconds());
+            start_audio_watchdog();
+        });
+        document.body.appendChild(btn);
+        audio_prompt_el = btn;
+        setTimeout(() => {
+            if (audio_prompt_el === btn) dismiss_audio_prompt();
+        }, 15000);
+    }
+
+    function start_audio_watchdog() {
+        stop_audio_watchdog();
+        audio_check_timer = setTimeout(() => {
+            audio_check_timer = 0;
+            if (mode !== 'intro' && mode !== 'playing') return;
+            if (muted) return;
+            if (using_fallback) {
+                // The element is the last audio path. If the policy paused or
+                // muted it, only a new click can recover.
+                if (!fallback_audio || fallback_audio.paused || fallback_audio.muted) {
+                    show_audio_prompt();
+                }
+                return;
+            }
+            if (!audio_ctx || audio_ctx.state !== 'running' || !output_analyser) {
+                show_audio_prompt();
+                return;
+            }
+            const buf = new Float32Array(output_analyser.fftSize);
+            output_analyser.getFloatTimeDomainData(buf);
+            let sum = 0;
+            for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+            if (Math.sqrt(sum / buf.length) < 0.001) {
+                show_audio_prompt();
+            }
+        }, 2200);
+    }
+
     // The watch timeline is driven by performance.now(), not by the audio
     // clock. Some browsers keep an AudioContext suspended (autoplay policy,
     // missing output device, iOS interruption), and previously that froze the
@@ -491,26 +574,48 @@
             return;
         }
         if (exporting) return;
+        stop_audio_watchdog();
+        dismiss_audio_prompt();
         stop_source();
         API.reset_playback();
         scene.reset();
         scene.draw();
 
-        start_clock(0);
-        mode = 'intro';
         paused_from = null;
-        // Start the fallback element inside the click gesture. Waiting for
-        // AudioContext.resume() first loses Safari's user-activation window and
-        // leaves the track silent even though the visuals keep moving.
-        if (audio_ctx && audio_ctx.state === 'running') {
-            sync_audio_to_visual();
-        } else if (fallback_audio) {
-            play_element_from(0);
+        const fallback_now = fallback_audio && (!audio_ctx || audio_ctx.state !== 'running');
+        if (fallback_now) {
+            // Safari will not reliably unmute a media element after the click
+            // gesture has ended. Start it audibly inside the gesture and skip
+            // the silent 1 s intro on this path, so picture and music still
+            // begin together instead of risking a completely silent track.
+            stop_source();
+            using_fallback = true;
+            intro_skipped = true;
+            fallback_audio.muted = muted;
+            fallback_audio.volume = 1;
+            try { fallback_audio.currentTime = 0; } catch (err) { /* 元数据还没到 */ }
+            const started = fallback_audio.play();
+            if (started && typeof started.catch === 'function') {
+                started.catch(() => show_audio_prompt());
+            }
+            API.begin_song();
+            scene.synchronize_marble();
+            scene.time = 0;
+            // The intro normally eases the camera onto the marble. Without it,
+            // snap once so the first skipped-intro frame is not off-centre.
+            SK.update_camera(view, scene.marble.position, true);
+            scene.draw();
+            start_clock(INTRO_SECONDS);
+            mode = 'playing';
         } else {
+            intro_skipped = false;
+            start_clock(0);
+            mode = 'intro';
             sync_audio_to_visual();
         }
         update_progress();
         set_play_ui();
+        start_audio_watchdog();
         if (!raf) raf = requestAnimationFrame(loop);
     }
 
@@ -520,6 +625,8 @@
         clock_offset = total_seconds();
         mode = 'finished';
         stop_source();
+        stop_audio_watchdog();
+        dismiss_audio_prompt();
         update_progress();
         set_play_ui();
         scene.time = API.get_time();
@@ -543,6 +650,7 @@
             } else {
                 sync_audio_to_visual();
             }
+            start_audio_watchdog();
             if (!raf) raf = requestAnimationFrame(loop);
             set_play_ui();
             return;
@@ -550,6 +658,8 @@
         if (mode === 'intro' || mode === 'playing') {
             paused_from = mode;
             pause_clock();
+            stop_audio_watchdog();
+            dismiss_audio_prompt();
             stop_fallback_timer();
             if (fallback_audio) fallback_audio.pause();
             if (audio_ctx && audio_ctx.state === 'running') {
@@ -655,7 +765,10 @@
         audio_ctx = new (window.AudioContext || window.webkitAudioContext)();
         output_gain = audio_ctx.createGain();
         output_gain.gain.value = muted ? 0 : 1;
-        output_gain.connect(audio_ctx.destination);
+        output_analyser = audio_ctx.createAnalyser();
+        output_analyser.fftSize = 1024;
+        output_gain.connect(output_analyser);
+        output_analyser.connect(audio_ctx.destination);
         // A suspended context can recover after the first tap/click. When it
         // does, join the run at the current visual position. If the fallback
         // element already took over, do not double-play.
@@ -1053,6 +1166,8 @@
         set_export_preview('');
         ratio_grid.querySelectorAll('button').forEach((b) => b.disabled = true);
         stop_source();
+        stop_audio_watchdog();
+        dismiss_audio_prompt();
         stop_clock();
         mode = 'exporting';
         set_play_ui();
@@ -1232,6 +1347,7 @@
             if (mode !== 'expired') {
                 stop_clock();
                 mode = 'idle';
+                intro_skipped = false;
                 scene.reset();
                 scene.draw();
                 update_progress();
@@ -1245,7 +1361,13 @@
         if (mode === 'intro' || mode === 'playing') {
             paused_from = mode;
             pause_clock();
-            audio_ctx.suspend();
+            stop_audio_watchdog();
+            dismiss_audio_prompt();
+            if (fallback_audio) fallback_audio.pause();
+            if (audio_ctx && audio_ctx.state === 'running') {
+                const paused = audio_ctx.suspend();
+                if (paused && typeof paused.catch === 'function') paused.catch(() => {});
+            }
             mode = 'paused';
             set_play_ui();
         }
@@ -1431,6 +1553,24 @@
             prompt('复制这条链接', location.href);
         }
     });
+    if (audio_help) {
+        audio_help.addEventListener('click', () => {
+            if (mode !== 'intro' && mode !== 'playing') {
+                toast('先播放，再切换音频通道。');
+                return;
+            }
+            dismiss_audio_prompt();
+            if (audio_ctx && audio_ctx.state !== 'running') {
+                try {
+                    const resumed = audio_ctx.resume();
+                    if (resumed && typeof resumed.catch === 'function') resumed.catch(() => {});
+                } catch (err) { /* 忽略 */ }
+            }
+            play_element_from(elapsed_seconds());
+            toast('已切换到媒体通道；仍无声请检查系统音量和标签页静音。');
+            start_audio_watchdog();
+        });
+    }
     download_button.addEventListener('click', open_export);
     close_export.addEventListener('click', close_export_modal);
     modal.addEventListener('click', (e) => {
@@ -1453,6 +1593,8 @@
     window.addEventListener('resize', resize);
     window.addEventListener('beforeunload', () => {
         clearInterval(expiry_timer);
+        stop_audio_watchdog();
+        dismiss_audio_prompt();
         stop_source();
         if (audio_ctx) audio_ctx.close();
     });
