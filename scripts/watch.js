@@ -1118,15 +1118,14 @@
             export_source.connect(egain);
             egain.connect(dest);
 
-            // Manual frame capture: on-screen auto-capture was throttled to a
-            // few frames per second in some browsers, producing near-still
-            // videos. Request one frame after every draw instead.
-            const video_stream = export_canvas.captureStream(0);
+            // Manual frame capture where supported: on-screen auto-capture can
+            // be throttled to a few frames per second. Safari may not expose
+            // requestFrame(), so fall back to normal 30 fps auto-capture there.
+            const manual_capture = typeof CanvasCaptureMediaStreamTrack !== 'undefined'
+                && typeof CanvasCaptureMediaStreamTrack.prototype.requestFrame === 'function';
+            const video_stream = export_canvas.captureStream(manual_capture ? 0 : 30);
             const video_track = video_stream.getVideoTracks()[0];
-            // The export canvas sits offscreen, and some browsers then throttle
-            // automatic capture to zero frames. requestFrame() after each draw
-            // guarantees the recorder receives the scene.
-            const force_frame = video_track && typeof video_track.requestFrame === 'function'
+            const force_frame = manual_capture
                 ? () => { try { video_track.requestFrame(); } catch (err) { /* 忽略 */ } }
                 : null;
             const stream = new MediaStream([
