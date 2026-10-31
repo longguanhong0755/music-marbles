@@ -58,8 +58,20 @@
     const OFFLINE_FPS = 30;
     const OFFLINE_BITRATE = 6_000_000;
     const OFFLINE_CODECS = ['avc1.640028', 'avc1.4D4028', 'avc1.42E028', 'avc1.42002A'];
-    const OFFLINE_AUDIO = {
+    // AAC is preferred for the downloaded file: QuickTime and Safari play
+    // AAC-in-MP4 but often play Opus-in-MP4 as silent video. Chrome only
+    // exposes AAC encoding on platforms with a system encoder, so Opus stays
+    // as the fallback.
+    const OFFLINE_AUDIO_AAC = {
+        codec: 'mp4a.40.2',
+        muxer_codec: 'aac',
+        sampleRate: 48000,
+        numberOfChannels: 2,
+        bitrate: 160_000
+    };
+    const OFFLINE_AUDIO_OPUS = {
         codec: 'opus',
+        muxer_codec: 'opus',
         sampleRate: 48000,
         numberOfChannels: 2,
         bitrate: 160_000
@@ -487,7 +499,16 @@
         start_clock(0);
         mode = 'intro';
         paused_from = null;
-        sync_audio_to_visual();
+        // Start the fallback element inside the click gesture. Waiting for
+        // AudioContext.resume() first loses Safari's user-activation window and
+        // leaves the track silent even though the visuals keep moving.
+        if (audio_ctx && audio_ctx.state === 'running') {
+            sync_audio_to_visual();
+        } else if (fallback_audio) {
+            play_element_from(0);
+        } else {
+            sync_audio_to_visual();
+        }
         update_progress();
         set_play_ui();
         if (!raf) raf = requestAnimationFrame(loop);
@@ -515,7 +536,13 @@
             resume_clock();
             mode = paused_from || 'playing';
             paused_from = null;
-            sync_audio_to_visual();
+            if (audio_ctx && audio_ctx.state === 'running') {
+                play_audio_from(elapsed_seconds());
+            } else if (fallback_audio) {
+                play_element_from(elapsed_seconds());
+            } else {
+                sync_audio_to_visual();
+            }
             if (!raf) raf = requestAnimationFrame(loop);
             set_play_ui();
             return;
@@ -649,6 +676,12 @@
         fallback_audio = new Audio(data.audioUrl);
         fallback_audio.preload = 'auto';
         fallback_audio.muted = true;
+        fallback_audio.setAttribute('playsinline', '');
+        fallback_audio.setAttribute('webkit-playsinline', '');
+        // Safari and iOS are much happier with a media element that is in the
+        // document. Keep it tiny and transparent, never display:none.
+        fallback_audio.style.cssText = 'position:fixed;left:-10px;top:-10px;width:1px;height:1px;opacity:0.01;pointer-events:none;';
+        document.body.appendChild(fallback_audio);
         fallback_audio.addEventListener('ended', () => {
             if (mode === 'playing') finish_run();
         });
@@ -740,19 +773,23 @@
     }
 
     // Static hosting has no server to mux the original track back in, so the
-    // browser has to encode audio as well. Opus-in-MP4 plays in Chrome/Edge;
-    // browsers that cannot handle it fall back to MediaRecorder instead.
+    // browser has to encode audio as well. Try AAC first for external players,
+    // then Opus for browsers that only ship an Opus encoder.
     async function pick_offline_audio() {
         if (!OFFLINE_AUDIO_READY) return null;
-        try {
-            const probe = document.createElement('video');
-            const can_play = probe.canPlayType('video/mp4; codecs="avc1.640028,opus"');
-            if (!can_play) return null;
-            const support = await AudioEncoder.isConfigSupported(OFFLINE_AUDIO);
-            return support && support.supported ? {...OFFLINE_AUDIO} : null;
-        } catch (err) {
-            return null;
+        const probe = document.createElement('video');
+        for (const config of [OFFLINE_AUDIO_AAC, OFFLINE_AUDIO_OPUS]) {
+            try {
+                if (config.muxer_codec === 'opus') {
+                    const can_play = probe.canPlayType('video/mp4; codecs="avc1.640028,opus"');
+                    if (!can_play) continue;
+                }
+                const {muxer_codec, ...encoder_config} = config;
+                const support = await AudioEncoder.isConfigSupported(encoder_config);
+                if (support && support.supported) return {...config};
+            } catch (err) { /* 尝试下一种音频编码 */ }
         }
+        return null;
     }
 
     async function encode_export_audio(muxer, config, duration) {
@@ -784,7 +821,8 @@
             error: (err) => { failure = err; }
         });
         try {
-            encoder.configure(config);
+            const {muxer_codec, ...encoder_config} = config;
+            encoder.configure(encoder_config);
             const left = rendered.getChannelData(0);
             const right = rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : left;
             const block = 4800; // 100 ms
@@ -837,7 +875,7 @@
         };
         if (audio_config) {
             muxer_options.audio = {
-                codec: 'opus',
+                codec: audio_config.muxer_codec,
                 sampleRate: audio_config.sampleRate,
                 numberOfChannels: audio_config.numberOfChannels
             };
