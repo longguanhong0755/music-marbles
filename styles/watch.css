@@ -65,6 +65,21 @@ input {
     display: none !important;
 }
 
+.svg-sprite {
+    position: absolute;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.icon {
+    display: block;
+    width: 1em;
+    height: 1em;
+    flex: none;
+}
+
 .kicker {
     margin: 0;
     font-family: var(--mono);
@@ -238,12 +253,10 @@ input {
 }
 
 .play-icon {
-    width: 0;
-    height: 0;
-    margin-left: 5px;
-    border-top: 12px solid transparent;
-    border-bottom: 12px solid transparent;
-    border-left: 18px solid var(--text);
+    width: 24px;
+    height: 24px;
+    margin: 1px 0 3px 3px;
+    color: var(--text);
 }
 
 .play-label {
@@ -314,6 +327,11 @@ input {
     background: #000;
 }
 
+.primary-link .icon {
+    width: 13px;
+    height: 13px;
+}
+
 .player-bar {
     display: flex;
     align-items: center;
@@ -347,75 +365,63 @@ input {
     height: 30px;
 }
 
-.pause-icon {
-    width: 10px;
-    height: 13px;
-    border-left: 3px solid currentColor;
-    border-right: 3px solid currentColor;
+.toggle-icon {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
 }
 
-.play-icon-small {
-    width: 0;
-    height: 0;
-    margin-left: 2px;
-    border-top: 7px solid transparent;
-    border-bottom: 7px solid transparent;
-    border-left: 10px solid currentColor;
+.toggle-icon .icon {
+    position: absolute;
+    inset: 0;
+    width: 16px;
+    height: 16px;
+}
+
+.toggle-icon .icon-pause {
+    display: none;
+}
+
+.toggle-icon[data-state="pause"] .icon-play {
+    display: none;
+}
+
+.toggle-icon[data-state="pause"] .icon-pause {
+    display: block;
 }
 
 .restart-icon {
-    width: 14px;
-    height: 14px;
-    border: 1.5px solid currentColor;
-    border-right-color: transparent;
-    border-radius: 50%;
-}
-
-.restart-icon::after {
-    content: "";
-    display: block;
-    width: 0;
-    height: 0;
-    margin-left: 8px;
-    margin-top: -4px;
-    border-top: 3.5px solid transparent;
-    border-bottom: 3.5px solid transparent;
-    border-left: 5px solid currentColor;
+    width: 16px;
+    height: 16px;
 }
 
 .sound-icon {
     position: relative;
-    width: 14px;
-    height: 10px;
-    border-left: 4px solid currentColor;
-    border-top: 3px solid transparent;
-    border-bottom: 3px solid transparent;
-}
-
-.sound-icon::after {
-    content: "";
-    position: absolute;
-    left: 2px;
-    top: -3px;
-    width: 7px;
-    height: 10px;
-    border: 1.5px solid currentColor;
-    border-left: 0;
-    border-top-color: transparent;
-    border-bottom-color: transparent;
-    border-radius: 0 50% 50% 0;
-}
-
-.sound-icon.muted::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 4px;
+    display: grid;
+    place-items: center;
     width: 16px;
-    height: 1.5px;
-    background: currentColor;
-    transform: rotate(-40deg);
-    transform-origin: left center;
+    height: 16px;
+}
+
+.sound-icon .icon {
+    position: absolute;
+    inset: 0;
+    width: 16px;
+    height: 16px;
+}
+
+.sound-icon .icon-volume-off {
+    display: none;
+}
+
+.sound-icon.muted .icon-volume {
+    display: none;
+}
+
+.sound-icon.muted .icon-volume-off {
+    display: block;
 }
 
 .time {
@@ -501,6 +507,10 @@ input {
 
 .download-button {
     appearance: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
     flex: none;
     border: 1px solid var(--solid);
     border-radius: 8px;
@@ -512,6 +522,11 @@ input {
     white-space: nowrap;
     cursor: pointer;
     transition: 150ms ease;
+}
+
+.download-button .icon {
+    width: 15px;
+    height: 15px;
 }
 
 .download-button:hover {
@@ -597,16 +612,22 @@ body.is-expired .download-button {
 
 .close-button {
     appearance: none;
+    display: grid;
+    place-items: center;
     width: 32px;
     height: 32px;
+    padding: 0;
     border: 1px solid var(--line);
     border-radius: 50%;
     background: transparent;
     color: var(--text-3);
-    font-size: 20px;
-    line-height: 1;
     cursor: pointer;
     transition: 140ms ease;
+}
+
+.close-button .icon {
+    width: 14px;
+    height: 14px;
 }
 
 .close-button:hover {
@@ -709,6 +730,21 @@ body.is-expired .download-button {
     border-radius: inherit;
     background: var(--text);
     transition: width 160ms linear;
+}
+
+.export-preview {
+    margin: 4px 0 16px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: #070a12;
+}
+
+.export-preview video {
+    display: block;
+    width: 100%;
+    max-height: min(46vh, 520px);
+    background: #070a12;
 }
 
 .primary-button {

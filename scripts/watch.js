@@ -31,14 +31,19 @@
     const export_status = document.getElementById('export-status');
     const export_progress = document.getElementById('export-progress');
     const export_progress_fill = document.getElementById('export-progress-fill');
+    const export_preview_wrap = document.getElementById('export-preview-wrap');
+    const export_preview = document.getElementById('export-preview');
     const export_download = document.getElementById('export-download');
     const toast_el = document.getElementById('toast');
 
-    const query_id = new URLSearchParams(location.search).get('id');
+    const page_query = new URLSearchParams(location.search);
+    const query_id = page_query.get('id');
+    const walls_query = page_query.get('walls');
     const path_id = location.pathname.includes('/watch/')
         ? location.pathname.split('/').filter(Boolean).pop()
         : '';
     const id = decodeURIComponent(query_id || path_id || '');
+    let walls_enabled = walls_query !== '0';
     const STATIC_HOST = !!window.MUSIC_MARBLES_STATIC;
     const MERGE_WINDOW_MS = 80;
     const INTRO_SECONDS = 1.0;
@@ -67,8 +72,9 @@
     let source = null;
     let mode = 'loading';
     let paused_from = null;
-    let intro_start_ctx = 0;
-    let audio_start_ctx = 0;
+    let clock_origin = 0;
+    let clock_offset = 0;
+    let clock_running = false;
     let raf = 0;
     let exporting = false;
     let muted = false;
@@ -112,16 +118,37 @@
         return (data && data.duration ? data.duration : 0) + INTRO_SECONDS;
     }
 
-    function current_visual_seconds() {
-        if (!audio_ctx) return 0;
-        if (mode === 'intro') return Math.min(INTRO_SECONDS, Math.max(0, audio_ctx.currentTime - intro_start_ctx));
-        if (mode === 'playing') return Math.min(total_seconds(), INTRO_SECONDS + Math.max(0, audio_ctx.currentTime - audio_start_ctx));
+    function elapsed_seconds() {
         if (mode === 'finished') return total_seconds();
-        if (mode === 'paused') {
-            if (paused_from === 'intro') return Math.min(INTRO_SECONDS, Math.max(0, audio_ctx.currentTime - intro_start_ctx));
-            return Math.min(total_seconds(), INTRO_SECONDS + Math.max(0, audio_ctx.currentTime - audio_start_ctx));
-        }
-        return 0;
+        if (mode === 'paused') return Math.min(total_seconds(), Math.max(0, clock_offset));
+        if (!clock_running) return 0;
+        const elapsed = clock_offset + (performance.now() - clock_origin) / 1000;
+        return Math.min(total_seconds(), Math.max(0, elapsed));
+    }
+
+    function start_clock(offset) {
+        clock_offset = Math.max(0, offset || 0);
+        clock_origin = performance.now();
+        clock_running = true;
+    }
+
+    function pause_clock() {
+        clock_offset = elapsed_seconds();
+        clock_running = false;
+    }
+
+    function resume_clock() {
+        clock_origin = performance.now();
+        clock_running = true;
+    }
+
+    function stop_clock() {
+        clock_running = false;
+        clock_offset = 0;
+    }
+
+    function current_visual_seconds() {
+        return elapsed_seconds();
     }
 
     function update_progress() {
@@ -134,7 +161,8 @@
 
     function set_play_ui() {
         const is_playing = mode === 'playing' || mode === 'intro';
-        toggle_icon.className = is_playing ? 'pause-icon' : 'play-icon-small';
+        toggle_icon.dataset.state = is_playing ? 'pause' : 'play';
+        toggle_button.title = is_playing ? '暂停' : '播放';
         const show_overlay = mode === 'idle' || mode === 'paused' || mode === 'finished' || mode === 'loading';
         overlay.classList.toggle('hidden', !show_overlay);
         play_button.disabled = mode === 'loading';
@@ -171,6 +199,7 @@
 
     function show_expired(message) {
         stop_source();
+        stop_clock();
         if (audio_ctx && audio_ctx.state === 'running') audio_ctx.suspend().catch(() => {});
         mode = 'expired';
         clearInterval(expiry_timer);
@@ -234,6 +263,7 @@
             duration: item.duration,
             audioUrl: audio_url,
             notes: notes.notes,
+            settings: item.settings && typeof item.settings === 'object' ? item.settings : null,
             builtin: true,
             permanent: true,
             expiresAt: null
@@ -250,13 +280,17 @@
         }
     }
 
+    function scene_options() {
+        return {walls: walls_enabled};
+    }
+
     function make_view() {
         const dpr = Math.min(2, window.devicePixelRatio || 1);
         const rect = stage.getBoundingClientRect();
         const width = Math.max(320, Math.round(rect.width || stage.clientWidth || window.innerWidth));
         const height = Math.max(240, Math.round(rect.height || stage.clientHeight || window.innerHeight));
         view = new SK.View(stage, width, height, dpr);
-        view.set_scale(SK.fit_scale(view.width, view.height, 820));
+        view.set_scale(SK.fit_scale_for_track(view.width, view.height, 820));
     }
 
     function resize() {
@@ -286,6 +320,69 @@
         source = null;
     }
 
+    // The watch timeline is driven by performance.now(), not by the audio
+    // clock. Some browsers keep an AudioContext suspended (autoplay policy,
+    // missing output device, iOS interruption), and previously that froze the
+    // whole scene. Audio now follows the visual clock; if it cannot start, the
+    // track still plays silently.
+    function play_audio_from(elapsed) {
+        if (!audio_ctx || !audio_buffer) return;
+        const t = Math.max(0, Number(elapsed) || 0);
+        const song_offset = t - INTRO_SECONDS;
+        if (song_offset >= audio_buffer.duration) return;
+
+        stop_source();
+        source = audio_ctx.createBufferSource();
+        source.buffer = audio_buffer;
+        source.connect(output_gain);
+        source.onended = () => {
+            if (mode === 'playing') finish_run();
+        };
+
+        if (t < INTRO_SECONDS) {
+            source.start(audio_ctx.currentTime + (INTRO_SECONDS - t));
+        } else {
+            source.start(audio_ctx.currentTime, Math.max(0, song_offset));
+        }
+    }
+
+    // Some browsers (Firefox with a strict autoplay policy, iOS after an
+    // interruption) leave resume() pending forever. Never await it without a
+    // deadline, or export gets stuck on its first status line.
+    function resume_audio_with_timeout(timeout_ms) {
+        if (!audio_ctx) return Promise.resolve(false);
+        if (audio_ctx.state === 'running') return Promise.resolve(true);
+        let resumed;
+        try { resumed = audio_ctx.resume(); } catch (err) { return Promise.resolve(false); }
+        return new Promise((resolve) => {
+            let settled = false;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                resolve(audio_ctx.state === 'running');
+            };
+            setTimeout(finish, timeout_ms || 1500);
+            if (resumed && typeof resumed.then === 'function') {
+                resumed.then(finish, finish);
+            } else {
+                finish();
+            }
+        });
+    }
+
+    function sync_audio_to_visual() {
+        if (!audio_ctx || !audio_buffer) return;
+        if (audio_ctx.state === 'running') {
+            play_audio_from(elapsed_seconds());
+            return;
+        }
+        resume_audio_with_timeout(1500).then((ok) => {
+            if (ok && (mode === 'intro' || mode === 'playing')) {
+                play_audio_from(elapsed_seconds());
+            }
+        });
+    }
+
     function start_run() {
         if (mode === 'expired') return;
         if (!audio_buffer) {
@@ -294,23 +391,14 @@
         }
         if (exporting) return;
         stop_source();
-        audio_ctx.resume();
         API.reset_playback();
         scene.reset();
         scene.draw();
 
-        source = audio_ctx.createBufferSource();
-        source.buffer = audio_buffer;
-        source.connect(output_gain);
-        source.onended = () => {
-            if (mode === 'playing') finish_run();
-        };
-
-        intro_start_ctx = audio_ctx.currentTime;
-        audio_start_ctx = intro_start_ctx + INTRO_SECONDS;
-        source.start(audio_start_ctx);
+        start_clock(0);
         mode = 'intro';
         paused_from = null;
+        sync_audio_to_visual();
         update_progress();
         set_play_ui();
         if (!raf) raf = requestAnimationFrame(loop);
@@ -318,6 +406,8 @@
 
     function finish_run() {
         if (mode === 'finished' || mode === 'expired') return;
+        clock_running = false;
+        clock_offset = total_seconds();
         mode = 'finished';
         stop_source();
         update_progress();
@@ -333,15 +423,17 @@
             return;
         }
         if (mode === 'paused') {
-            audio_ctx.resume();
+            resume_clock();
             mode = paused_from || 'playing';
             paused_from = null;
+            sync_audio_to_visual();
             if (!raf) raf = requestAnimationFrame(loop);
             set_play_ui();
             return;
         }
         if (mode === 'intro' || mode === 'playing') {
             paused_from = mode;
+            pause_clock();
             audio_ctx.suspend();
             mode = 'paused';
             set_play_ui();
@@ -359,13 +451,14 @@
         muted = !muted;
         if (output_gain) output_gain.gain.setTargetAtTime(muted ? 0 : 1, audio_ctx.currentTime, 0.02);
         sound_icon.classList.toggle('muted', muted);
+        mute_button.title = muted ? '取消静音' : '静音';
     }
 
     function loop() {
         raf = 0;
         if (mode === 'expired') return;
         if (mode === 'intro') {
-            const t = audio_ctx.currentTime - intro_start_ctx;
+            const t = elapsed_seconds();
             if (t < INTRO_SECONDS) {
                 scene.set_intro_progress(Math.max(0, t), API.get_intro());
                 scene.draw();
@@ -380,7 +473,7 @@
         }
 
         if (mode === 'playing') {
-            const song_time = audio_ctx.currentTime - audio_start_ctx;
+            const song_time = Math.max(0, elapsed_seconds() - INTRO_SECONDS);
             if (song_time >= 0) {
                 let steps = 0;
                 // 后台标签页会节流 rAF。这里按音频时钟补足 tick，
@@ -434,6 +527,20 @@
         export_progress_fill.style.width = `${Math.min(100, Math.max(0, pct * 100))}%`;
     }
 
+    function set_export_preview(url) {
+        if (!export_preview || !export_preview_wrap) return;
+        if (!url) {
+            export_preview.pause();
+            export_preview.removeAttribute('src');
+            export_preview.load();
+            export_preview_wrap.classList.add('hidden');
+            return;
+        }
+        export_preview.src = url;
+        export_preview.load();
+        export_preview_wrap.classList.remove('hidden');
+    }
+
     function yield_control() {
         if (window.scheduler && typeof window.scheduler.yield === 'function') {
             return window.scheduler.yield();
@@ -472,10 +579,10 @@
         canvas.width = w;
         canvas.height = h;
 
-        const eview = new SK.View(canvas, w, h, 1);
-        eview.set_scale(Math.min(w, h) / 820);
         prepare_engine();
-        const escene = new SK.Scene(track, eview, seed);
+        const eview = new SK.View(canvas, w, h, 1);
+        eview.set_scale(SK.fit_scale_for_track(w, h, 820));
+        const escene = new SK.Scene(track, eview, seed, scene_options());
         escene.reset();
 
         const duration = Math.max(1, Number(data.duration) || 1);
@@ -581,6 +688,7 @@
             export_url = URL.createObjectURL(blob);
             export_name = `${data.title || 'music-marbles'}-${ratio}.${ext}`;
             export_download.textContent = `下载 ${ext.toLowerCase() === 'mp4' ? 'MP4' : 'WEBM'}`;
+            set_export_preview(export_url);
             set_export_progress(1);
             set_export_status('演示版已在浏览器内生成，点击下方按钮下载。');
             export_download.classList.remove('hidden');
@@ -605,6 +713,7 @@
 
         export_url = result.url;
         export_name = result.download || `${data.title || 'music-marbles'}-${ratio}.mp4`;
+        set_export_preview(export_url);
         set_export_progress(1);
         set_export_status('已生成，MP4 可在 10 分钟内下载。');
         export_download.classList.remove('hidden');
@@ -646,9 +755,10 @@
         export_url = '';
         export_name = '';
         export_download.classList.add('hidden');
+        set_export_preview('');
         ratio_grid.querySelectorAll('button').forEach((b) => b.disabled = true);
         stop_source();
-        if (mode === 'paused') await audio_ctx.resume();
+        stop_clock();
         mode = 'exporting';
         set_play_ui();
         set_export_status(`正在准备 ${ratio.replace('x', ':')}…`);
@@ -678,6 +788,12 @@
 
             if (!can_record) throw new Error('这个浏览器无法录制画布视频，请换 Chrome 或 Safari。');
             if (!mime) throw new Error('浏览器里没有可用的视频编码器。');
+            if (audio_ctx.state !== 'running') {
+                await resume_audio_with_timeout(1500);
+            }
+            if (audio_ctx.state !== 'running') {
+                throw new Error('浏览器阻止了音频播放，请点击页面后重新导出。');
+            }
             set_export_status(`正在实时录制 ${ratio.replace('x', ':')} · 请保持页面在前台…`);
             set_export_progress(0);
 
@@ -688,11 +804,10 @@
             export_canvas.style.cssText = `position:fixed;left:-10000px;top:0;width:${w}px;height:${h}px;`;
             document.body.appendChild(export_canvas);
 
-            const eview = new SK.View(export_canvas, w, h, 1);
-            eview.set_scale(Math.min(w, h) / 820);
-
             prepare_engine();
-            const escene = new SK.Scene(track, eview, seed);
+            const eview = new SK.View(export_canvas, w, h, 1);
+            eview.set_scale(SK.fit_scale_for_track(w, h, 820));
+            const escene = new SK.Scene(track, eview, seed, scene_options());
             escene.reset();
 
             const dest = audio_ctx.createMediaStreamDestination();
@@ -704,6 +819,13 @@
             egain.connect(dest);
 
             const video_stream = export_canvas.captureStream(30);
+            const video_track = video_stream.getVideoTracks()[0];
+            // The export canvas sits offscreen, and some browsers then throttle
+            // automatic capture to zero frames. requestFrame() after each draw
+            // guarantees the recorder receives the scene.
+            const force_frame = video_track && typeof video_track.requestFrame === 'function'
+                ? () => { try { video_track.requestFrame(); } catch (err) { /* 忽略 */ } }
+                : null;
             const stream = new MediaStream([
                 ...video_stream.getVideoTracks(),
                 ...dest.stream.getAudioTracks()
@@ -734,6 +856,7 @@
                         if (t < INTRO_SECONDS) {
                             escene.set_intro_progress(Math.max(0, t), eint);
                             escene.draw();
+                            if (force_frame) force_frame();
                             set_export_progress((t / (INTRO_SECONDS + duration)) * 0.98);
                         } else {
                             if (!began) {
@@ -754,6 +877,7 @@
                             }
                             escene.time = API.get_time();
                             escene.draw();
+                            if (force_frame) force_frame();
                             set_export_progress(Math.min(0.98, (INTRO_SECONDS + Math.max(0, song_time)) / (INTRO_SECONDS + duration)));
                             if (song_time >= duration + 0.55) {
                                 resolve();
@@ -793,6 +917,7 @@
             ratio_grid.querySelectorAll('button').forEach((b) => b.disabled = false);
             exporting = false;
             if (mode !== 'expired') {
+                stop_clock();
                 mode = 'idle';
                 scene.reset();
                 scene.draw();
@@ -806,11 +931,13 @@
         if (!data || mode === 'expired') return;
         if (mode === 'intro' || mode === 'playing') {
             paused_from = mode;
+            pause_clock();
             audio_ctx.suspend();
             mode = 'paused';
             set_play_ui();
         }
         if (export_url && export_url.startsWith('blob:')) URL.revokeObjectURL(export_url);
+        set_export_preview('');
         export_url = '';
         export_name = '';
         export_download.textContent = '下载 MP4';
@@ -824,6 +951,7 @@
 
     function close_export_modal() {
         if (exporting) return;
+        if (export_preview) export_preview.pause();
         modal.classList.add('hidden');
     }
 
@@ -915,12 +1043,17 @@
 
             title_el.textContent = data.title || '音乐弹珠';
             document.title = `${data.title || '音乐弹珠'} — 音乐弹珠`;
+            if (data.settings && typeof data.settings.walls === 'boolean') {
+                walls_enabled = data.settings.walls;
+            }
+            if (walls_query === '1') walls_enabled = true;
+            else if (walls_query === '0') walls_enabled = false;
             track = merge_notes(data.notes || []);
             if (!track.length) throw new Error('这条轨道没有音符');
             prepare_engine();
             await SK.load_images();
             make_view();
-            scene = new SK.Scene(track, view, seed);
+            scene = new SK.Scene(track, view, seed, scene_options());
             scene.reset();
             scene.draw();
             update_progress();

@@ -328,6 +328,9 @@ async function process_video(input, output, {offline, audio, ext}) {
         return;
     }
     const codecs = await media_codecs(input);
+    if (!codecs.video) {
+        throw new Error('录制的视频没有画面，请重新导出。');
+    }
     if (
         ['.mp4', '.mov'].includes(String(ext || '').toLowerCase())
         && codecs.video === 'h264'
@@ -410,6 +413,9 @@ app.get('/api/tracks/:id', async (req, res) => {
             id,
             title: meta.title,
             duration: meta.duration,
+            settings: meta.settings && typeof meta.settings === 'object'
+                ? {walls: meta.settings.walls !== false}
+                : {walls: true},
             audioUrl: `/media/${id}/audio`,
             notes: JSON.parse(notes),
             builtin: false,
@@ -437,6 +443,8 @@ app.post('/api/tracks', audioUpload.single('audio'), async (req, res, next) => {
         const duration = Math.max(1, Math.min(600, Number(req.body.duration) || (notes[notes.length - 1].time + 2)));
         const audioOffset = Math.max(0, Math.min(36000, Number(req.body.audioOffset) || 0));
         const padStart = Math.max(0, Math.min(1, Number(req.body.padStart) || 0));
+        const walls = String(req.body.walls || '1') !== '0';
+        const settings = {walls};
 
         const id = make_id();
         const dir = path.join(TRACKS, id);
@@ -454,6 +462,7 @@ app.post('/api/tracks', audioUpload.single('audio'), async (req, res, next) => {
             duration,
             audioOffset,
             padStart,
+            settings,
             notes: notes.length,
             originalName: req.file.originalname || '',
             createdAt: new Date(now).toISOString(),
@@ -461,11 +470,15 @@ app.post('/api/tracks', audioUpload.single('audio'), async (req, res, next) => {
         });
 
         const base = public_base(req);
+        const watch_url = new URL(`${base}/watch.html`);
+        watch_url.searchParams.set('id', id);
+        watch_url.searchParams.set('walls', walls ? '1' : '0');
         res.json({
             id,
             title,
             duration,
-            watchUrl: `${base}/watch.html?id=${encodeURIComponent(id)}`,
+            settings,
+            watchUrl: watch_url.href,
             audioUrl: `/media/${id}/audio`,
             expiresAt: now + CONTENT_TTL_MS,
             ttlSeconds: CONTENT_TTL_MS / 1000
@@ -600,8 +613,10 @@ app.get('/media/exports/:id/video-:ratio.mp4', async (req, res) => {
     });
 });
 
-app.use('/styles', express.static(path.join(ROOT, 'styles'), {maxAge: '5m'}));
-app.use('/scripts', express.static(path.join(ROOT, 'scripts'), {maxAge: '5m'}));
+// Code and styles change during deployment; let browsers revalidate so a
+// normal reload picks up new icons and playback fixes without a hard refresh.
+app.use('/styles', express.static(path.join(ROOT, 'styles'), {maxAge: 0, etag: true, lastModified: true}));
+app.use('/scripts', express.static(path.join(ROOT, 'scripts'), {maxAge: 0, etag: true, lastModified: true}));
 app.use('/images', express.static(path.join(ROOT, 'images'), {maxAge: '1d'}));
 app.use('/vendor', express.static(path.join(ROOT, 'vendor'), {maxAge: '1d'}));
 app.use('/builtins', express.static(BUILTINS, {maxAge: '1h'}));

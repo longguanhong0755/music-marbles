@@ -95,6 +95,50 @@
         return Math.max(0.5, Math.min(1.6, short / (target || 820)));
     }
 
+    // Bounds of everything the camera can see: the generated run, the intro
+    // origin (0, 0), and the thickness of the wall-mounted bars. The engine
+    // alone does not expose the bar extents, so a small margin stands in for
+    // the plank half-length plus the marble radius.
+    function track_bounds() {
+        if (!global.API) return null;
+        const path = global.API.get_path ? global.API.get_path() : [];
+        if (!path || !path.length) return null;
+        let min_x = Infinity, max_x = -Infinity;
+        let min_y = Infinity, max_y = -Infinity;
+        const add = (x, y) => {
+            if (x < min_x) min_x = x;
+            if (x > max_x) max_x = x;
+            if (y < min_y) min_y = y;
+            if (y > max_y) max_y = y;
+        };
+        for (let i = 0; i < path.length; i++) add(path[i].x, path[i].y);
+        add(0, 0);
+        const margin = 48;
+        return {
+            min_x: min_x - margin,
+            max_x: max_x + margin,
+            min_y: min_y - margin,
+            max_y: max_y + margin,
+            width: max_x - min_x + margin * 2,
+            height: max_y - min_y + margin * 2
+        };
+    }
+
+    // fit_scale() is tuned for the watch page and never zooms in past 1.6.
+    // Short tracks (three or four notes) leave most of an export frame black
+    // at that scale, so exports may upscale until the whole run fits.
+    function fit_scale_for_track(width, height, target, max_scale) {
+        const base = fit_scale(width, height, target);
+        const bounds = track_bounds();
+        if (!bounds || bounds.width < 1 || bounds.height < 1) return base;
+        const pad = Math.min(width, height) * 0.08;
+        const fit = Math.min(
+            Math.max(1, width - pad * 2) / bounds.width,
+            Math.max(1, height - pad * 2) / bounds.height
+        );
+        return Math.max(base, Math.min(fit, max_scale || 2.2));
+    }
+
     function init_stars(view, seed) {
         view.seed = seed >>> 0;
         const rand = mulberry32(view.seed || 1);
@@ -129,7 +173,7 @@
         ctx.restore();
     }
 
-    function draw_background(view) {
+    function draw_background(view, wall_field) {
         const ctx = view.ctx;
         const w = view.width, h = view.height;
         const g = ctx.createRadialGradient(w * 0.5, h * 0.38, 0, w * 0.5, h * 0.38, Math.max(w, h) * 0.72);
@@ -139,6 +183,10 @@
         ctx.fillStyle = g;
         ctx.fillRect(0, 0, w, h);
         draw_stars(view);
+
+        // Walls sit over the stars but under the vignette so the whole field
+        // still feels like one dark room.
+        if (wall_field) wall_field.draw(view);
 
         // a soft vignette keeps the edges from competing with the run
         const v = ctx.createRadialGradient(w * 0.5, h * 0.5, Math.min(w, h) * 0.25, w * 0.5, h * 0.5, Math.max(w, h) * 0.72);
@@ -313,7 +361,7 @@
     }
 
     class Scene {
-        constructor(track, view, seed) {
+        constructor(track, view, seed, options) {
             this.track = track;
             this.view = view;
             this.rand = mulberry32(seed || 1);
@@ -321,8 +369,25 @@
             this.marble = new Marble([API.get_marble_x(0), API.get_marble_y(0)]);
             this.particles = [];
             this.time = 0;
+            this.wall_field = null;
+            this.walls_enabled = !options || options.walls !== false;
+            this.wall_options = options && options.wall_options ? options.wall_options : null;
+            this.rebuild_walls();
             init_stars(view, seed || 1);
             this.reset_camera();
+        }
+
+        rebuild_walls() {
+            if (!this.walls_enabled || !global.WallKit) {
+                this.wall_field = null;
+                return;
+            }
+            this.wall_field = global.WallKit.build(
+                API.get_path(),
+                API.get_start(),
+                this.wall_options || undefined,
+                API.get_planks()
+            );
         }
 
         reset_camera() {
@@ -388,7 +453,7 @@
 
         draw() {
             const view = this.view;
-            draw_background(view);
+            draw_background(view, this.wall_field);
             for (let i = 0; i < this.planks.length; i++) this.planks[i].draw(view, this.time);
             this.marble.draw(view);
             for (let i = 0; i < this.particles.length; i++) this.particles[i].draw(view);
@@ -432,6 +497,8 @@
         load_images,
         note_hue,
         fit_scale,
+        fit_scale_for_track,
+        track_bounds,
         init_stars,
         draw_background,
         update_camera,

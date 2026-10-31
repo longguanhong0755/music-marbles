@@ -11,6 +11,36 @@
     <script>window.MUSIC_MARBLES_STATIC = window.MUSIC_MARBLES_STATIC || /(^|\.)github\.io$/i.test(location.hostname) || location.protocol === 'file:';</script>
 </head>
 <body>
+    <svg class="svg-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+        <symbol id="i-play" viewBox="0 0 24 24">
+            <path d="M8.6 5.2v13.6L19.2 12 8.6 5.2Z" fill="currentColor"/>
+        </symbol>
+        <symbol id="i-pause" viewBox="0 0 24 24">
+            <path d="M9 5.4v13.2M15 5.4v13.2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+        </symbol>
+        <symbol id="i-restart" viewBox="0 0 24 24">
+            <path d="M19.6 11.6a7.8 7.8 0 1 1-2.13-5.37" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            <path d="M19.8 4.6v5.2h-5.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        </symbol>
+        <symbol id="i-volume" viewBox="0 0 24 24">
+            <path d="M4.2 9.3h3.5L12.3 6v12l-4.6-3.3H4.2V9.3Z" fill="currentColor"/>
+            <path d="M15.2 8.7a4.7 4.7 0 0 1 0 6.6M17.9 6.1a8.4 8.4 0 0 1 0 11.8" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"/>
+        </symbol>
+        <symbol id="i-volume-off" viewBox="0 0 24 24">
+            <path d="M4.2 9.3h3.5L12.3 6v12l-4.6-3.3H4.2V9.3Z" fill="currentColor"/>
+            <path d="m15.2 9.6 4.9 4.9m0-4.9-4.9 4.9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </symbol>
+        <symbol id="i-close" viewBox="0 0 24 24">
+            <path d="m6.6 6.6 10.8 10.8m0-10.8L6.6 17.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </symbol>
+        <symbol id="i-download" viewBox="0 0 24 24">
+            <path d="M12 4.5v10.2m0 0 3.8-3.8M12 14.7 8.2 10.9M5.3 19.2h13.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        </symbol>
+        <symbol id="i-arrow-right" viewBox="0 0 24 24">
+            <path d="M4.5 12h14m0 0-5.2-5.2M18.5 12l-5.2 5.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        </symbol>
+    </svg>
+
     <header class="topbar">
         <div class="topbar-inner">
             <a class="brand" href="./">
@@ -35,7 +65,7 @@
 
             <div class="play-overlay" id="play-overlay">
                 <button class="play-card" id="play-button" type="button">
-                    <span class="play-icon" aria-hidden="true"></span>
+                    <svg class="icon play-icon" aria-hidden="true"><use href="#i-play"></use></svg>
                     <span class="play-label">正在加载…</span>
                     <span class="play-sub">准备音频与轨道</span>
                 </button>
@@ -46,24 +76,30 @@
                     <p class="kicker">LINK EXPIRED</p>
                     <strong>链接已过期</strong>
                     <p id="expired-message">链接不存在，或内容已超过 10 分钟被删除。</p>
-                    <a class="primary-link" href="./">新建一条 →</a>
+                    <a class="primary-link" href="./">新建一条 <svg class="icon" aria-hidden="true"><use href="#i-arrow-right"></use></svg></a>
                 </div>
             </div>
         </div>
 
         <div class="player-bar">
             <button class="control" id="toggle-button" type="button" title="暂停">
-                <span class="pause-icon" id="toggle-icon" aria-hidden="true"></span>
+                <span class="toggle-icon" id="toggle-icon" data-state="play" aria-hidden="true">
+                    <svg class="icon icon-play"><use href="#i-play"></use></svg>
+                    <svg class="icon icon-pause"><use href="#i-pause"></use></svg>
+                </span>
             </button>
             <button class="control" id="restart-button" type="button" title="重新开始">
-                <span class="restart-icon" aria-hidden="true"></span>
+                <svg class="icon restart-icon" aria-hidden="true"><use href="#i-restart"></use></svg>
             </button>
             <div class="time" id="time-label">0:00 / 0:00</div>
             <div class="progress" id="progress-track">
                 <div class="progress-fill" id="progress-fill"></div>
             </div>
             <button class="control small" id="mute-button" type="button" title="静音">
-                <span class="sound-icon" id="sound-icon" aria-hidden="true"></span>
+                <span class="sound-icon" id="sound-icon" aria-hidden="true">
+                    <svg class="icon icon-volume"><use href="#i-volume"></use></svg>
+                    <svg class="icon icon-volume-off"><use href="#i-volume-off"></use></svg>
+                </span>
             </button>
         </div>
 
@@ -73,7 +109,10 @@
                 <span class="expiry-value" id="expiry-value">--:--</span>
                 <button class="link-button" id="extend-button" type="button">延长 10 分钟</button>
             </div>
-            <button class="download-button" id="download-button" type="button">下载视频</button>
+            <button class="download-button" id="download-button" type="button">
+                <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+                <span>下载视频</span>
+            </button>
         </div>
     </main>
 
@@ -89,7 +128,9 @@
                     <p class="modal-kicker">EXPORT</p>
                     <h2>下载轨道视频</h2>
                 </div>
-                <button class="close-button" id="close-export" type="button" aria-label="关闭">×</button>
+                <button class="close-button" id="close-export" type="button" aria-label="关闭">
+                    <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+                </button>
             </div>
             <p class="modal-copy">选择画面比例。支持时会在后台离线渲染，速度比实时录制更快；否则自动回退为实时录制。导出的文件同样保留 10 分钟。</p>
             <div class="ratio-grid" id="ratio-grid">
@@ -116,6 +157,9 @@
             </div>
             <div class="export-status" id="export-status"></div>
             <div class="export-progress hidden" id="export-progress"><div id="export-progress-fill"></div></div>
+            <div class="export-preview hidden" id="export-preview-wrap">
+                <video id="export-preview" controls playsinline webkit-playsinline preload="metadata"></video>
+            </div>
             <button class="primary-button hidden" id="export-download" type="button">下载 MP4</button>
             <p class="modal-foot">MP4 · H.264 + AAC · 1080p · 30 fps</p>
         </div>
@@ -124,6 +168,7 @@
     <div class="toast" id="toast"></div>
 
     <script src="scripts/engine.js"></script>
+    <script src="scripts/walls.js"></script>
     <script src="scripts/scene.js"></script>
     <script src="scripts/vendor/mp4-muxer.js"></script>
     <script src="scripts/watch.js"></script>

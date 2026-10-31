@@ -11,6 +11,7 @@
     const file_size = document.getElementById('file-size');
     const clear_file = document.getElementById('clear-file');
     const title_input = document.getElementById('title-input');
+    const walls_toggle = document.getElementById('walls-toggle');
     const generate_button = document.getElementById('generate-button');
     const generate_label = document.getElementById('generate-label');
     const stage = document.getElementById('stage');
@@ -43,6 +44,13 @@
     let preview_audio = null;
     let preview_button = null;
     let toast_timer = 0;
+    let walls_on = true;
+
+    function set_walls(value) {
+        walls_on = !!value;
+        walls_toggle.setAttribute('aria-checked', walls_on ? 'true' : 'false');
+        walls_toggle.setAttribute('aria-label', walls_on ? '关闭墙壁' : '开启墙壁');
+    }
 
     function asset_url(path) {
         return new URL(String(path || '').replace(/^\//, ''), document.baseURI).href;
@@ -89,6 +97,7 @@
         file_input.disabled = value;
         clear_file.disabled = value;
         title_input.disabled = value;
+        walls_toggle.disabled = value;
         builtin_list.querySelectorAll('.builtin-card').forEach((card) => {
             card.style.pointerEvents = value ? 'none' : '';
             card.style.opacity = value ? '0.55' : '';
@@ -186,7 +195,10 @@
             card.className = 'builtin-card';
             card.dataset.id = track.id;
             card.innerHTML = `
-                <button class="preview-button" type="button" aria-label="试听 ${escape_html(track.title)}">▶</button>
+                <button class="preview-button" type="button" aria-label="试听 ${escape_html(track.title)}">
+                    <svg class="icon icon-play" aria-hidden="true"><use href="#i-play"></use></svg>
+                    <svg class="icon icon-pause" aria-hidden="true"><use href="#i-pause"></use></svg>
+                </button>
                 <div class="builtin-info">
                     <strong>${escape_html(track.title)}</strong>
                     <small>${escape_html(track.subtitle)} · ${duration_label(track.duration)} · ${track.bars} 根</small>
@@ -207,16 +219,22 @@
         }
     }
 
+    function set_preview_state(button, playing) {
+        if (!button) return;
+        button.classList.toggle('playing', !!playing);
+        const title = button.closest('.builtin-card')
+            ? button.closest('.builtin-card').querySelector('.builtin-info strong')
+            : null;
+        button.setAttribute('aria-label', `${playing ? '暂停试听' : '试听'}${title ? ' ' + title.textContent : ''}`);
+    }
+
     function toggle_preview(track, button) {
         if (preview_audio && !preview_audio.paused) {
             const was_this = preview_button === button;
             preview_audio.pause();
             preview_audio.currentTime = 0;
             preview_audio = null;
-            if (preview_button) {
-                preview_button.textContent = '▶';
-                preview_button.classList.remove('playing');
-            }
+            if (preview_button) set_preview_state(preview_button, false);
             preview_button = null;
             if (was_this) return;
         }
@@ -225,14 +243,12 @@
         audio.volume = 0.75;
         preview_audio = audio;
         preview_button = button;
-        button.textContent = '❚❚';
-        button.classList.add('playing');
+        set_preview_state(button, true);
         audio.addEventListener('ended', () => {
             if (preview_audio === audio) {
                 preview_audio = null;
                 preview_button = null;
-                button.textContent = '▶';
-                button.classList.remove('playing');
+                set_preview_state(button, false);
             }
         }, {once: true});
         audio.play().catch(() => toast('试听无法开始，请再点一次。'));
@@ -490,6 +506,7 @@
         fd.append('duration', built.duration.toFixed(3));
         fd.append('audioOffset', built.audioOffset.toFixed(3));
         fd.append('padStart', built.padStart.toFixed(3));
+        fd.append('walls', walls_on ? '1' : '0');
 
         try {
             set_stage('上传音频', 90, '一次短请求，音频保存在这台服务器上。');
@@ -508,8 +525,9 @@
     function generate_from_builtin() {
         const track = selected_builtin;
         if (!track) return;
-        const url = new URL(`watch.html?id=${encodeURIComponent(track.id)}`, document.baseURI).href;
-        show_result(url, track.title, null, true);
+        const url = new URL(`watch.html?id=${encodeURIComponent(track.id)}`, document.baseURI);
+        url.searchParams.set('walls', walls_on ? '1' : '0');
+        show_result(url.href, track.title, null, true);
         toast('内置曲目的链接已生成。');
     }
 
@@ -531,8 +549,7 @@
             preview_audio = null;
         }
         if (preview_button) {
-            preview_button.textContent = '▶';
-            preview_button.classList.remove('playing');
+            set_preview_state(preview_button, false);
             preview_button = null;
         }
         clear_selected_file();
@@ -540,6 +557,7 @@
         set_selected_card(null);
         title_input.value = '';
         title_input.placeholder = '为这条轨道命名';
+        set_walls(true);
         result.classList.add('hidden');
         stage.classList.add('hidden');
         clear_error();
@@ -567,6 +585,9 @@
         if (file) set_file(file);
     });
     generate_button.addEventListener('click', on_generate);
+    walls_toggle.addEventListener('click', () => {
+        if (!busy) set_walls(!walls_on);
+    });
     copy_link.addEventListener('click', async () => {
         try {
             await navigator.clipboard.writeText(result_link.value);
@@ -614,5 +635,6 @@
         }
     }
 
+    set_walls(true);
     load_builtins();
 })();
