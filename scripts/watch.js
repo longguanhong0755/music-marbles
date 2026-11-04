@@ -7,6 +7,7 @@
     const stage = document.getElementById('stage');
     const title_el = document.getElementById('track-title');
     const track_status = document.getElementById('track-status');
+    const track_source = document.getElementById('track-source');
     const overlay = document.getElementById('play-overlay');
     const play_button = document.getElementById('play-button');
     const audio_help = document.getElementById('audio-help');
@@ -17,6 +18,7 @@
     const toggle_button = document.getElementById('toggle-button');
     const toggle_icon = document.getElementById('toggle-icon');
     const restart_button = document.getElementById('restart-button');
+    const reroll_button = document.getElementById('reroll-button');
     const mute_button = document.getElementById('mute-button');
     const sound_icon = document.getElementById('sound-icon');
     const share_button = document.getElementById('share-button');
@@ -36,11 +38,17 @@
     const export_preview = document.getElementById('export-preview');
     const export_download = document.getElementById('export-download');
     const export_foot = document.getElementById('export-foot');
+    const fast_export_input = document.getElementById('fast-export');
+    const export_capability = document.getElementById('export-capability');
+    const theme_buttons = Array.from(document.querySelectorAll('.theme-option[data-bg]'));
     const toast_el = document.getElementById('toast');
 
     const page_query = new URLSearchParams(location.search);
     const query_id = page_query.get('id');
     const walls_query = page_query.get('walls');
+    const seed_query = page_query.get('seed');
+    const bg_query = page_query.get('bg');
+    const has_seed_query = seed_query !== null;
     const path_id = location.pathname.includes('/watch/')
         ? location.pathname.split('/').filter(Boolean).pop()
         : '';
@@ -55,9 +63,22 @@
         '1x1': [1080, 1080],
         '4x5': [1080, 1350]
     };
+    const FAST_DIMS = {
+        '9x16': [720, 1280],
+        '16x9': [1280, 720],
+        '1x1': [720, 720],
+        '4x5': [720, 900]
+    };
     const EXPORT_TAIL_SECONDS = 0.55;
     const OFFLINE_FPS = 30;
     const OFFLINE_BITRATE = 6_000_000;
+    const FAST_BITRATE = 3_000_000;
+    const RATIO_LABELS = {
+        '9x16': ['1080 × 1920 · 抖音 / Reels', '720 × 1280 · 抖音 / Reels'],
+        '16x9': ['1920 × 1080 · YouTube', '1280 × 720 · YouTube'],
+        '1x1': ['1080 × 1080 · 信息流', '720 × 720 · 信息流'],
+        '4x5': ['1080 × 1350 · 竖版信息流', '720 × 900 · 竖版信息流']
+    };
     const OFFLINE_CODECS = ['avc1.640028', 'avc1.4D4028', 'avc1.42E028', 'avc1.42002A'];
     // AAC is preferred for the downloaded file: QuickTime and Safari play
     // AAC-in-MP4 but often play Opus-in-MP4 as silent video. Chrome only
@@ -107,18 +128,151 @@
     let raf = 0;
     let exporting = false;
     let muted = false;
+    let fast_export = false;
     let export_url = '';
     let export_name = '';
+    let export_local_url = '';
+    let capability_cache = null;
     let toast_timer = 0;
     let expiry_timer = 0;
     let expires_at = 0;
     let extend_busy = false;
+    let map_seed = has_seed_query ? parse_seed(seed_query) : 0;
     let seed = 1;
     let static_mode = STATIC_HOST;
+    let background = read_background_pref();
+    if (bg_query) {
+        background = SK.normalize_background(bg_query);
+    } else {
+        try {
+            history.replaceState(null, '', background_url(background).href);
+        } catch (err) { /* 某些 file:// 环境不允许改地址栏 */ }
+    }
+    apply_background_ui();
 
     play_button.disabled = true;
     download_button.disabled = true;
     extend_button.disabled = true;
+    if (reroll_button) reroll_button.disabled = true;
+
+    function parse_seed(value) {
+        const raw = String(value == null ? '' : value).trim().toLowerCase();
+        if (!raw) return 0;
+        if (/^\d+$/.test(raw)) {
+            const n = Number(raw);
+            return Number.isFinite(n) ? (Math.floor(n) >>> 0) : 0;
+        }
+        if (!/^[0-9a-z]{1,7}$/.test(raw)) return 0;
+        const n = parseInt(raw, 36);
+        return Number.isFinite(n) ? (n >>> 0) : 0;
+    }
+
+    function random_seed() {
+        try {
+            const buf = new Uint32Array(1);
+            crypto.getRandomValues(buf);
+            if (buf[0]) return buf[0];
+        } catch (err) { /* 回退到 Math.random */ }
+        return (Math.floor(Math.random() * 0xFFFFFFFF) >>> 0) || 1;
+    }
+
+    function seed_url(value) {
+        const url = new URL(location.href);
+        if (value) url.searchParams.set('seed', (value >>> 0).toString(36));
+        else url.searchParams.delete('seed');
+        return url;
+    }
+
+    function read_background_pref() {
+        try {
+            return SK.normalize_background(localStorage.getItem('mm_background'));
+        } catch (err) {
+            return 'dark';
+        }
+    }
+
+    function save_background_pref(value) {
+        try {
+            localStorage.setItem('mm_background', value === 'light' ? 'light' : 'dark');
+        } catch (err) { /* 忽略 */ }
+    }
+
+    function background_url(value) {
+        const url = new URL(location.href);
+        url.searchParams.set('bg', value === 'light' ? 'white' : 'black');
+        return url;
+    }
+
+    function apply_background_ui() {
+        const light = background === 'light';
+        document.body.classList.toggle('scene-light', light);
+        for (const button of theme_buttons) {
+            const active = button.dataset.bg === background;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        }
+    }
+
+    function set_background(value, options) {
+        const next = SK.normalize_background(value);
+        const opts = options || {};
+        if (next === background && !opts.force) return;
+        background = next;
+        apply_background_ui();
+        if (opts.persist !== false) save_background_pref(background);
+        if (opts.update_url !== false) {
+            try {
+                history.replaceState(null, '', background_url(background).href);
+            } catch (err) { /* 某些 file:// 环境不允许改地址栏 */ }
+        }
+        if (scene) {
+            scene.background = background;
+            scene.view.plank_cache = null;
+            scene.draw();
+        }
+        if (!opts.silent) {
+            toast(background === 'light' ? '已切换为纯白背景。' : '已切换为黑色背景。');
+        }
+    }
+
+    function read_fast_pref() {
+        try {
+            return localStorage.getItem('mm_fast_export') === '1';
+        } catch (err) {
+            return false;
+        }
+    }
+
+    function save_fast_pref(value) {
+        try {
+            localStorage.setItem('mm_fast_export', value ? '1' : '0');
+        } catch (err) { /* 忽略 */ }
+    }
+
+    function dims_for(ratio, fast) {
+        return (fast ? FAST_DIMS : DIMS)[ratio] || DIMS[ratio];
+    }
+
+    function bitrate_for(fast) {
+        return fast ? FAST_BITRATE : OFFLINE_BITRATE;
+    }
+
+    function update_export_foot() {
+        if (!export_foot) return;
+        const size = fast_export ? '720p' : '1080p';
+        export_foot.textContent = static_mode
+            ? `MP4 / WebM · ${size} · 30 fps`
+            : `MP4 · H.264 + AAC · ${size} · 30 fps`;
+    }
+
+    function update_ratio_labels() {
+        if (!ratio_grid) return;
+        ratio_grid.querySelectorAll('.ratio-card').forEach((card) => {
+            const labels = RATIO_LABELS[card.dataset.ratio];
+            const small = card.querySelector('small');
+            if (labels && small) small.textContent = fast_export ? labels[1] : labels[0];
+        });
+    }
 
     function hash_id(str) {
         let h = 2166136261 >>> 0;
@@ -194,6 +348,10 @@
         const is_playing = mode === 'playing' || mode === 'intro';
         toggle_icon.dataset.state = is_playing ? 'pause' : 'play';
         toggle_button.title = is_playing ? '暂停' : '播放';
+        if (reroll_button) reroll_button.disabled = mode === 'loading' || mode === 'expired' || exporting;
+        for (const button of theme_buttons) {
+            button.disabled = mode === 'loading' || mode === 'expired' || exporting;
+        }
         const show_overlay = mode === 'idle' || mode === 'paused' || mode === 'finished' || mode === 'loading';
         overlay.classList.toggle('hidden', !show_overlay);
         play_button.disabled = mode === 'loading';
@@ -249,6 +407,7 @@
         extend_button.classList.add('hidden');
         download_button.disabled = true;
         play_button.disabled = true;
+        if (reroll_button) reroll_button.disabled = true;
         update_progress();
     }
 
@@ -297,6 +456,9 @@
             audioUrl: audio_url,
             notes: notes.notes,
             settings: item.settings && typeof item.settings === 'object' ? item.settings : null,
+            source: item.source || '',
+            sourceUrl: item.sourceUrl || '',
+            license: item.license || '',
             builtin: true,
             permanent: true,
             expiresAt: null
@@ -307,14 +469,14 @@
         API.set_intro_enabled(true);
         API.reset_tracks();
         for (const n of track) API.add_time_of_hit(0, Math.round(n.time * 1000));
-        API.init_generator();
+        API.init_generator(map_seed);
         if (API.get_planks().length !== track.length) {
             throw new Error(`轨道数量不匹配（${API.get_planks().length} 根横杆 / ${track.length} 个音符）`);
         }
     }
 
     function scene_options() {
-        return {walls: walls_enabled};
+        return {walls: walls_enabled, background};
     }
 
     function make_view() {
@@ -680,6 +842,42 @@
         start_run();
     }
 
+    function reroll_map() {
+        if (exporting || mode === 'expired' || mode === 'loading' || !scene) return;
+        stop_audio_watchdog();
+        dismiss_audio_prompt();
+        stop_source();
+        stop_clock();
+        if (audio_ctx && audio_ctx.state === 'running') {
+            const paused = audio_ctx.suspend();
+            if (paused && typeof paused.catch === 'function') paused.catch(() => {});
+        }
+
+        map_seed = random_seed();
+        seed = map_seed;
+        try {
+            history.replaceState(null, '', seed_url(map_seed).href);
+        } catch (err) { /* 某些 file:// 环境不允许改地址栏 */ }
+
+        try {
+            prepare_engine();
+        } catch (err) {
+            console.error(err);
+            toast('换图失败，请再试一次。');
+            return;
+        }
+        scene = new SK.Scene(track, view, seed, scene_options());
+        scene.reset();
+        scene.set_intro_progress(0, API.get_intro());
+        SK.update_camera(view, scene.marble.position, true);
+        scene.draw();
+        intro_skipped = false;
+        mode = 'idle';
+        update_progress();
+        set_play_ui();
+        toast('已换一条新路线。');
+    }
+
     function toggle_mute() {
         if ((!audio_ctx && !fallback_audio) || mode === 'expired') return;
         muted = !muted;
@@ -722,7 +920,6 @@
                     API.update_main_world();
                     scene.synchronize_marble();
                     scene.process_hits();
-                    scene.update_particles();
                     SK.update_camera(view, scene.marble.position);
                     steps++;
                 }
@@ -857,12 +1054,12 @@
     // H.264 is often SLOWER than real time once canvas readback and muxing are
     // counted, which made "fast export" take minutes on long tracks. Prefer
     // hardware; report software separately so the caller can decide.
-    async function pick_offline_codec(width, height, allow_software) {
+    async function pick_offline_codec(width, height, allow_software, bitrate) {
         if (!OFFLINE_READY) return null;
         const base = {
             width,
             height,
-            bitrate: OFFLINE_BITRATE,
+            bitrate: bitrate || OFFLINE_BITRATE,
             framerate: OFFLINE_FPS
         };
         for (const codec of OFFLINE_CODECS) {
@@ -888,10 +1085,53 @@
     // Static hosting has no server to mux the original track back in, so the
     // browser has to encode audio as well. Try AAC first for external players,
     // then Opus for browsers that only ship an Opus encoder.
-    async function pick_offline_audio() {
+    // isConfigSupported() is only a hint on some builds. A real configure +
+    // encode + flush catches the case where AAC is listed but the platform
+    // encoder cannot actually produce frames.
+    function probe_audio_config(config, timeout_ms) {
+        return new Promise((resolve) => {
+            let done = false;
+            let encoder = null;
+            const finish = (ok) => {
+                if (done) return;
+                done = true;
+                if (encoder && encoder.state !== 'closed') {
+                    try { encoder.close(); } catch (err) { /* 忽略 */ }
+                }
+                resolve(ok);
+            };
+            try {
+                encoder = new AudioEncoder({
+                    output: () => {},
+                    error: () => finish(false)
+                });
+                const {muxer_codec, ...encoder_config} = config;
+                encoder.configure(encoder_config);
+                const frames = Math.min(4800, encoder_config.sampleRate);
+                const data = new Float32Array(frames * encoder_config.numberOfChannels);
+                const frame = new AudioData({
+                    format: 'f32-planar',
+                    sampleRate: encoder_config.sampleRate,
+                    numberOfFrames: frames,
+                    numberOfChannels: encoder_config.numberOfChannels,
+                    timestamp: 0,
+                    data
+                });
+                encoder.encode(frame);
+                frame.close();
+                encoder.flush().then(() => finish(true), () => finish(false));
+            } catch (err) {
+                finish(false);
+            }
+            setTimeout(() => finish(false), timeout_ms || 1500);
+        });
+    }
+
+    async function pick_offline_audio(aac_only) {
         if (!OFFLINE_AUDIO_READY) return null;
         const probe = document.createElement('video');
         for (const config of [OFFLINE_AUDIO_AAC, OFFLINE_AUDIO_OPUS]) {
+            if (aac_only && config.muxer_codec !== 'aac') continue;
             try {
                 if (config.muxer_codec === 'opus') {
                     const can_play = probe.canPlayType('video/mp4; codecs="avc1.640028,opus"');
@@ -899,13 +1139,15 @@
                 }
                 const {muxer_codec, ...encoder_config} = config;
                 const support = await AudioEncoder.isConfigSupported(encoder_config);
-                if (support && support.supported) return {...config};
+                if (!support || !support.supported) continue;
+                if (config.muxer_codec === 'aac' && !(await probe_audio_config(config))) continue;
+                return {...config};
             } catch (err) { /* 尝试下一种音频编码 */ }
         }
         return null;
     }
 
-    async function encode_export_audio(muxer, config, duration) {
+    function start_export_audio(config, duration) {
         if (!audio_buffer) throw new Error('音频还没有加载');
         const music = Math.max(0, Math.min(duration, audio_buffer.duration));
         const channels = config.numberOfChannels;
@@ -913,13 +1155,34 @@
         const frames = Math.max(1, Math.ceil((INTRO_SECONDS + music) * rate));
 
         // Resample and prepend the same 1 s silent intro the scene uses, so
-        // the muxed audio lines up with frame zero.
+        // the muxed audio lines up with frame zero. Rendering starts before
+        // the video loop; the main thread keeps drawing while the browser
+        // processes the audio graph off-thread.
         const offline = new OfflineAudioContext(channels, frames, rate);
         const src = offline.createBufferSource();
         src.buffer = audio_buffer;
         src.connect(offline.destination);
         src.start(INTRO_SECONDS, 0, music);
-        const rendered = await offline.startRendering();
+
+        const job = {config, channels, rate, music, frames, started: performance.now()};
+        job.rendered_promise = offline.startRendering().then((buffer) => {
+            job.render_ms = performance.now() - job.started;
+            return buffer;
+        });
+        // The video loop may run for a long time before finish_export_audio()
+        // awaits this. Attach a handler now so a failure is not reported as an
+        // unhandled rejection; the await still throws the original error.
+        job.rendered_promise.catch(() => {});
+        return job;
+    }
+
+    async function finish_export_audio(muxer, job, stats) {
+        const wait_start = performance.now();
+        const rendered = await job.rendered_promise;
+        if (stats) {
+            stats.audio_render_ms = job.render_ms || 0;
+            stats.audio_wait_ms = performance.now() - wait_start;
+        }
 
         let failure = null;
         const encoder = new AudioEncoder({
@@ -934,29 +1197,31 @@
             error: (err) => { failure = err; }
         });
         try {
-            const {muxer_codec, ...encoder_config} = config;
+            const {muxer_codec, ...encoder_config} = job.config;
             encoder.configure(encoder_config);
             const left = rendered.getChannelData(0);
             const right = rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : left;
             const block = 4800; // 100 ms
+            const encode_start = performance.now();
             for (let offset = 0; offset < rendered.length; offset += block) {
                 if (failure) throw failure;
                 const n = Math.min(block, rendered.length - offset);
-                const planar = new Float32Array(n * channels);
+                const planar = new Float32Array(n * job.channels);
                 planar.set(left.subarray(offset, offset + n), 0);
-                if (channels > 1) planar.set(right.subarray(offset, offset + n), n);
+                if (job.channels > 1) planar.set(right.subarray(offset, offset + n), n);
                 const frame = new AudioData({
                     format: 'f32-planar',
-                    sampleRate: rate,
+                    sampleRate: job.rate,
                     numberOfFrames: n,
-                    numberOfChannels: channels,
-                    timestamp: Math.round(offset * 1_000_000 / rate),
+                    numberOfChannels: job.channels,
+                    timestamp: Math.round(offset * 1_000_000 / job.rate),
                     data: planar
                 });
                 encoder.encode(frame);
                 frame.close();
             }
             await encoder.flush();
+            if (stats) stats.audio_encode_ms = performance.now() - encode_start;
             if (failure) throw failure;
         } finally {
             if (encoder.state !== 'closed') {
@@ -965,21 +1230,51 @@
         }
     }
 
-    async function render_offline(ratio, dims, codec, audio_config, hardware) {
+    async function render_offline(ratio, dims, codec, audio_config, hardware, options) {
+        const opts = options || {};
+        const bitrate = opts.bitrate || OFFLINE_BITRATE;
+        const fast = !!opts.fast;
+        const stats = {
+            mode: 'offline',
+            ratio,
+            width: dims[0],
+            height: dims[1],
+            fast,
+            background,
+            bitrate,
+            frames: 0,
+            setup_ms: 0,
+            audio_render_ms: 0,
+            audio_wait_ms: 0,
+            audio_encode_ms: 0,
+            sim_ms: 0,
+            draw_ms: 0,
+            readback_ms: 0,
+            encode_ms: 0,
+            queue_wait_ms: 0,
+            flush_ms: 0,
+            mux_ms: 0,
+            total_ms: 0
+        };
+        const export_started = performance.now();
+
         const [w, h] = dims;
         const canvas = document.createElement('canvas');
         canvas.width = w;
         canvas.height = h;
 
+        const setup_start = performance.now();
         prepare_engine();
         const eview = new SK.View(canvas, w, h, 1);
         eview.set_scale(SK.fit_scale_for_track(w, h, 820));
         const escene = new SK.Scene(track, eview, seed, scene_options());
         escene.reset();
+        stats.setup_ms = performance.now() - setup_start;
 
         const duration = Math.max(1, Number(data.duration) || 1);
         const total = INTRO_SECONDS + duration + EXPORT_TAIL_SECONDS;
         const frames = Math.max(1, Math.ceil(total * OFFLINE_FPS));
+        stats.frames = frames;
         const target = new window.Mp4Muxer.ArrayBufferTarget();
         const muxer_options = {
             target,
@@ -1012,7 +1307,7 @@
                 codec,
                 width: w,
                 height: h,
-                bitrate: OFFLINE_BITRATE,
+                bitrate,
                 framerate: OFFLINE_FPS
             };
             if (hardware) encoder_config.hardwareAcceleration = 'prefer-hardware';
@@ -1021,10 +1316,10 @@
             throw new Error(`视频编码器启动失败：${err.message || err}`);
         }
 
-        if (audio_config) {
-            await encode_export_audio(muxer, audio_config, duration);
-            if (failure) throw failure;
-        }
+        // Render the audio graph while the video loop runs. The audio encoder
+        // is fed after the last frame; mp4-muxer stores per-track samples, so
+        // audio chunks may arrive after all video chunks.
+        const audio_job = audio_config ? start_export_audio(audio_config, duration) : null;
 
         const eint = API.get_intro();
         let began = false;
@@ -1032,9 +1327,9 @@
             for (let i = 0; i < frames; i++) {
                 if (failure) throw failure;
                 const t = i / OFFLINE_FPS;
+                const sim_start = performance.now();
                 if (t < INTRO_SECONDS) {
                     escene.set_intro_progress(Math.max(0, t), eint);
-                    escene.draw();
                 } else {
                     if (!began) {
                         API.begin_song();
@@ -1048,82 +1343,215 @@
                         API.update_main_world();
                         escene.synchronize_marble();
                         escene.process_hits();
-                        escene.update_particles();
                         SK.update_camera(eview, escene.marble.position);
                         steps++;
                     }
                     escene.time = API.get_time();
-                    escene.draw();
                 }
+                stats.sim_ms += performance.now() - sim_start;
+
+                const draw_start = performance.now();
+                escene.draw();
+                stats.draw_ms += performance.now() - draw_start;
 
                 const stamp = {
                     timestamp: Math.round(i * 1_000_000 / OFFLINE_FPS),
                     duration: Math.round(1_000_000 / OFFLINE_FPS)
                 };
+                const readback_start = performance.now();
                 const frame = new VideoFrame(canvas, stamp);
-                encoder.encode(frame, {keyFrame: i % (OFFLINE_FPS * 2) === 0});
+                stats.readback_ms += performance.now() - readback_start;
+
+                const encode_start = performance.now();
+                encoder.encode(frame, {keyFrame: i % (OFFLINE_FPS * 4) === 0});
+                stats.encode_ms += performance.now() - encode_start;
                 frame.close();
 
                 if (i % 6 === 0 || i === frames - 1) {
-                    set_export_progress(0.02 + 0.96 * ((i + 1) / frames));
+                    set_export_progress(0.02 + 0.94 * ((i + 1) / frames));
                     await yield_control();
-                }
-                // 软件编码器可能先缓冲一批帧，不能只等 encodeQueueSize 降下来。
-                // 每 4 秒强制 flush 一次，既能回收编码队列，也避免长视频堆积内存。
-                if (i > 0 && i % (OFFLINE_FPS * 4) === 0) {
-                    await encoder.flush();
-                    if (failure) throw failure;
+                    // Keep the encoder pipeline full without draining it every
+                    // few frames. If the software encoder is simply slower than
+                    // drawing, wait for it instead of piling up raw frames.
+                    if (encoder.encodeQueueSize > 12) {
+                        const queue_start = performance.now();
+                        while (encoder.encodeQueueSize > 4) {
+                            await new Promise((resolve) => setTimeout(resolve, 0));
+                            if (performance.now() - queue_start > 15000) {
+                                const flush_start = performance.now();
+                                await encoder.flush();
+                                stats.flush_ms += performance.now() - flush_start;
+                                break;
+                            }
+                        }
+                        stats.queue_wait_ms += performance.now() - queue_start;
+                    }
                 }
             }
+            const final_flush_start = performance.now();
             await encoder.flush();
+            stats.flush_ms += performance.now() - final_flush_start;
             if (failure) throw failure;
+
+            if (audio_job) {
+                await finish_export_audio(muxer, audio_job, stats);
+                if (failure) throw failure;
+            }
         } finally {
             if (encoder.state !== 'closed') {
                 try { encoder.close(); } catch (err) { /* 忽略 */ }
             }
         }
 
+        const mux_start = performance.now();
         muxer.finalize();
-        return new Blob([target.buffer], {type: 'video/mp4'});
+        const blob = new Blob([target.buffer], {type: 'video/mp4'});
+        stats.mux_ms = performance.now() - mux_start;
+        stats.scene = escene.draw_timings;
+        stats.total_ms = performance.now() - export_started;
+        stats.bytes = blob.size;
+        window.__mm_export_stats = stats;
+        console.info('[export]', stats);
+        return blob;
     }
 
-    async function upload_export(blob, ext, ratio, offline) {
+    function export_summary(blob) {
+        const s = window.__mm_export_stats || {};
+        const seconds = ((s.total_ms || 0) + (s.upload_ms || 0)) / 1000;
+        const mb = blob && blob.size ? blob.size / (1024 * 1024) : 0;
+        return `${seconds > 0 ? ` · ${seconds.toFixed(1)} 秒` : ''}${mb > 0 ? ` · ${mb.toFixed(1)} MB` : ''}`;
+    }
+
+    function set_local_export(blob, ratio, ext) {
+        if (export_local_url) URL.revokeObjectURL(export_local_url);
+        export_local_url = URL.createObjectURL(blob);
+        export_url = export_local_url;
+        export_name = `${data.title || 'music-marbles'}-${ratio}.${ext}`;
+        export_download.textContent = `下载 ${ext.toLowerCase() === 'mp4' ? 'MP4' : 'WEBM'}`;
+        set_export_preview(export_local_url);
+        export_download.classList.remove('hidden');
+    }
+
+    function upload_video(blob, fields, on_progress) {
+        return new Promise((resolve, reject) => {
+            const fd = new FormData();
+            fd.append('video', blob, fields.filename || 'export.mp4');
+            for (const [key, value] of Object.entries(fields)) {
+                if (key !== 'filename') fd.append(key, value);
+            }
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/video');
+            xhr.responseType = 'json';
+            xhr.upload.onprogress = (event) => {
+                if (on_progress && event.lengthComputable && event.total > 0) {
+                    on_progress(event.loaded / event.total);
+                }
+            };
+            xhr.onload = () => {
+                const result = xhr.response || {};
+                if (xhr.status < 200 || xhr.status >= 300 || !result.url) {
+                    reject(new Error(result.error || '转换失败'));
+                    return;
+                }
+                resolve(result);
+            };
+            xhr.onerror = () => reject(new Error('上传失败，请检查网络。'));
+            xhr.ontimeout = () => reject(new Error('上传超时。'));
+            xhr.send(fd);
+        });
+    }
+
+    async function upload_export(blob, ext, ratio, offline, options) {
         if (!blob || !blob.size) throw new Error('导出结果为空，请重试。');
+        const opts = options || {};
+        const muxed = !!opts.muxed;
+        const upload_started = performance.now();
+        const stats = window.__mm_export_stats;
 
         if (static_mode) {
-            if (export_url && export_url.startsWith('blob:')) URL.revokeObjectURL(export_url);
-            export_url = URL.createObjectURL(blob);
-            export_name = `${data.title || 'music-marbles'}-${ratio}.${ext}`;
-            export_download.textContent = `下载 ${ext.toLowerCase() === 'mp4' ? 'MP4' : 'WEBM'}`;
-            set_export_preview(export_url);
+            set_local_export(blob, ratio, ext);
             set_export_progress(1);
-            set_export_status('演示版已在浏览器内生成，点击下方按钮下载。');
-            export_download.classList.remove('hidden');
+            set_export_status('演示版已在浏览器内生成，点击下方按钮下载。' + export_summary(blob));
+            if (stats) {
+                stats.upload_mode = 'local';
+                stats.total_export_ms = performance.now() - upload_started + (stats.total_ms || 0);
+            }
             return;
         }
 
-        set_export_status(offline ? '正在封装音频与 MP4…' : '正在上传并转换为 MP4…');
-        set_export_progress(0.99);
+        const name = data.title || 'music-marbles';
 
-        const fd = new FormData();
-        fd.append('video', blob, `export.${ext}`);
-        fd.append('ratio', ratio);
-        fd.append('name', data.title || 'music-marbles');
-        if (offline) {
-            fd.append('offline', '1');
-            fd.append('trackId', id);
+        // AAC is available in this browser: the local blob is already a
+        // complete MP4. Make it downloadable immediately and upload a copy
+        // for the 10-minute share link in the background. Server-side work
+        // becomes a stream copy instead of an audio re-encode.
+        if (muxed) {
+            set_local_export(blob, ratio, ext);
+            set_export_progress(0.97);
+            set_export_status('本地 MP4 已就绪，正在上传分享副本…');
+            try {
+                const result = await upload_video(blob, {
+                    ratio,
+                    name,
+                    muxed: '1',
+                    filename: `export.${ext}`
+                }, (fraction) => {
+                    set_export_progress(0.97 + 0.025 * fraction);
+                    set_export_status(`本地 MP4 已就绪 · 上传分享副本 ${Math.round(fraction * 100)}%…`);
+                });
+                if (stats) {
+                    stats.upload_mode = 'local-first';
+                    stats.upload_ms = performance.now() - upload_started;
+                    stats.server_url = result.url;
+                }
+                set_export_progress(1);
+                set_export_status('已生成，MP4 可在 10 分钟内下载。' + export_summary(blob));
+            } catch (err) {
+                console.warn('分享副本上传失败：', err);
+                if (stats) {
+                    stats.upload_mode = 'local-first-failed';
+                    stats.upload_ms = performance.now() - upload_started;
+                    stats.upload_error = err.message || String(err);
+                }
+                set_export_progress(1);
+                set_export_status(`本地文件已就绪，可直接下载；分享副本上传失败：${err.message || err}`);
+            }
+            return;
         }
 
-        const resp = await fetch('/api/video', {method: 'POST', body: fd});
-        const result = await resp.json().catch(() => ({}));
-        if (!resp.ok || !result.url) throw new Error(result.error || '转换失败');
+        const label = offline ? '正在封装音频与 MP4…' : '正在上传并转换为 MP4…';
+        set_export_status(label);
+        set_export_progress(0.97);
 
-        export_url = result.url;
-        export_name = result.download || `${data.title || 'music-marbles'}-${ratio}.mp4`;
-        set_export_preview(export_url);
-        set_export_progress(1);
-        set_export_status('已生成，MP4 可在 10 分钟内下载。');
-        export_download.classList.remove('hidden');
+        try {
+            const result = await upload_video(blob, {
+                ratio,
+                name,
+                ...(offline ? {offline: '1', trackId: id} : {}),
+                filename: `export.${ext}`
+            }, (fraction) => {
+                set_export_progress(0.97 + 0.02 * fraction);
+                set_export_status(`${offline ? '正在封装音频与 MP4' : '正在上传并转换为 MP4'} ${Math.round(fraction * 100)}%…`);
+            });
+            export_url = result.url;
+            export_name = result.download || `${name}-${ratio}.mp4`;
+            set_export_preview(export_url);
+            if (stats) {
+                stats.upload_mode = offline ? 'server-mux' : 'server-transcode';
+                stats.upload_ms = performance.now() - upload_started;
+                stats.server_url = result.url;
+            }
+            set_export_progress(1);
+            set_export_status('已生成，MP4 可在 10 分钟内下载。' + export_summary(blob));
+            export_download.classList.remove('hidden');
+        } catch (err) {
+            if (stats) {
+                stats.upload_mode = offline ? 'server-mux-failed' : 'server-transcode-failed';
+                stats.upload_ms = performance.now() - upload_started;
+                stats.upload_error = err.message || String(err);
+            }
+            throw err;
+        }
     }
 
     function choose_mime() {
@@ -1153,8 +1581,11 @@
 
     async function export_ratio(ratio) {
         if (exporting || !audio_buffer || mode === 'expired') return;
-        const dims = DIMS[ratio];
+        const dims = dims_for(ratio, fast_export);
         if (!dims) return;
+        const bitrate = bitrate_for(fast_export);
+        const export_started = performance.now();
+        window.__mm_export_stats = null;
 
         const can_record = typeof MediaRecorder !== 'undefined' && !!HTMLCanvasElement.prototype.captureStream;
         const mime = can_record ? choose_mime() : '';
@@ -1162,9 +1593,14 @@
         exporting = true;
         export_url = '';
         export_name = '';
-        export_download.classList.add('hidden');
         set_export_preview('');
+        if (export_local_url) {
+            URL.revokeObjectURL(export_local_url);
+            export_local_url = '';
+        }
+        export_download.classList.add('hidden');
         ratio_grid.querySelectorAll('button').forEach((b) => b.disabled = true);
+        if (fast_export_input) fast_export_input.disabled = true;
         stop_source();
         stop_audio_watchdog();
         dismiss_audio_prompt();
@@ -1178,30 +1614,44 @@
         let recorder = null;
         let export_source = null;
         try {
-            const codec_info = await pick_offline_codec(dims[0], dims[1], true);
-            const audio_config = static_mode && codec_info ? await pick_offline_audio() : null;
+            const codec_info = await pick_offline_codec(dims[0], dims[1], true, bitrate);
+            // Static hosting has no server to add the original audio, so the
+            // browser must encode it. Server mode only encodes AAC locally:
+            // that lets the server copy the finished MP4 instead of re-encoding
+            // audio. Opus-in-MP4 would be silent in QuickTime/Safari, so the
+            // video-only + server-audio path stays as the fallback.
+            const audio_config = codec_info
+                ? await pick_offline_audio(!static_mode)
+                : null;
+            const muxed = !static_mode && !!audio_config && audio_config.muxer_codec === 'aac';
+            const audio_for_render = static_mode ? audio_config : (muxed ? audio_config : null);
             // If the browser can only encode Opus but MediaRecorder can record
             // AAC, prefer the recorder. QuickTime and Safari play AAC but treat
-            // Opus-in-MP4 as silent video. This is the compatibility path for
-            // browsers without an AAC AudioEncoder.
+            // Opus-in-MP4 as silent video.
             const prefer_recorder_audio = static_mode
                 && !!audio_config
                 && audio_config.muxer_codec === 'opus'
                 && mime.indexOf('mp4a') >= 0;
-            const offline_ready = !!codec_info && (!static_mode || !!audio_config) && !prefer_recorder_audio;
+            const offline_ready = !!codec_info
+                && (!static_mode || !!audio_config)
+                && !prefer_recorder_audio;
             if (offline_ready) {
                 let blob = null;
                 try {
-                    set_export_status(`正在离线渲染 ${ratio.replace('x', ':')} · ${codec_info.hardware ? '硬件加速' : '软件编码'}…`);
+                    set_export_status(`正在离线渲染 ${ratio.replace('x', ':')} · ${dims[0]}×${dims[1]}${fast_export ? ' 快速' : ''} · ${codec_info.hardware ? '硬件加速' : '软件编码'}…`);
                     set_export_progress(0);
-                    blob = await render_offline(ratio, dims, codec_info.codec, audio_config, codec_info.hardware);
+                    blob = await render_offline(ratio, dims, codec_info.codec, audio_for_render, codec_info.hardware, {
+                        fast: fast_export,
+                        bitrate,
+                        muxed
+                    });
                 } catch (err) {
                     console.warn('离线导出失败，回退到实时录制：', err);
                     set_export_status('离线渲染不可用，正在实时录制…');
                     set_export_progress(0);
                 }
                 if (blob) {
-                    await upload_export(blob, 'mp4', ratio, true);
+                    await upload_export(blob, 'mp4', ratio, true, {muxed});
                     return;
                 }
             }
@@ -1214,10 +1664,19 @@
             if (audio_ctx.state !== 'running') {
                 throw new Error('浏览器阻止了音频播放，请点击页面后重新导出。');
             }
-            set_export_status(`正在实时录制 ${ratio.replace('x', ':')}${prefer_recorder_audio ? ' · AAC 音频兼容模式' : ''} · 请保持页面在前台…`);
+            set_export_status(`正在实时录制 ${ratio.replace('x', ':')}${fast_export ? ' · 720p 快速' : ''}${prefer_recorder_audio ? ' · AAC 音频兼容模式' : ''} · 请保持页面在前台…`);
             set_export_progress(0);
 
             const [w, h] = dims;
+            window.__mm_export_stats = {
+                mode: 'recorder',
+                ratio,
+                width: w,
+                height: h,
+                fast: fast_export,
+                bitrate,
+                total_export_ms: 0
+            };
             export_canvas = document.createElement('canvas');
             export_canvas.width = w;
             export_canvas.height = h;
@@ -1259,7 +1718,7 @@
             const chunks = [];
             recorder = new MediaRecorder(stream, {
                 mimeType: mime,
-                videoBitsPerSecond: 6_000_000,
+                videoBitsPerSecond: bitrate,
                 audioBitsPerSecond: 128_000
             });
             recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
@@ -1299,7 +1758,6 @@
                                 API.update_main_world();
                                 escene.synchronize_marble();
                                 escene.process_hits();
-                                escene.update_particles();
                                 SK.update_camera(eview, escene.marble.position);
                                 steps++;
                             }
@@ -1329,6 +1787,9 @@
             const blob = new Blob(chunks, {type: recorded_mime.split(';')[0] || 'video/webm'});
             if (!blob.size) throw new Error('录制结果为空，请重试。');
             dest.stream.getTracks().forEach((tr) => tr.stop());
+            if (window.__mm_export_stats) {
+                window.__mm_export_stats.total_ms = performance.now() - export_started;
+            }
             await upload_export(blob, recorded_mime.indexOf('mp4') >= 0 ? 'mp4' : 'webm', ratio, false);
         } catch (err) {
             console.error(err);
@@ -1343,6 +1804,7 @@
             }
             if (export_canvas && export_canvas.parentNode) export_canvas.parentNode.removeChild(export_canvas);
             ratio_grid.querySelectorAll('button').forEach((b) => b.disabled = false);
+            if (fast_export_input) fast_export_input.disabled = false;
             exporting = false;
             if (mode !== 'expired') {
                 stop_clock();
@@ -1353,7 +1815,45 @@
                 update_progress();
                 set_play_ui();
             }
+            const stats = window.__mm_export_stats;
+            if (stats) {
+                stats.total_export_ms = performance.now() - export_started;
+                console.info('[export-total]', stats);
+            }
         }
+    }
+
+    async function probe_capability() {
+        if (capability_cache) return capability_cache;
+        if (!OFFLINE_READY) {
+            capability_cache = {level: 'recorder', text: '实时录制（较慢）'};
+            return capability_cache;
+        }
+        if (static_mode) {
+            const audio = await pick_offline_audio(false);
+            if (!audio) {
+                capability_cache = {level: 'recorder', text: '实时录制（缺少音频编码器）'};
+                return capability_cache;
+            }
+        }
+        const hardware = await pick_offline_codec(1920, 1080, false, OFFLINE_BITRATE);
+        if (hardware) {
+            capability_cache = {level: 'hardware', text: '硬件 H.264 · 离线渲染', hardware: true};
+            return capability_cache;
+        }
+        const software = await pick_offline_codec(1920, 1080, true, OFFLINE_BITRATE);
+        capability_cache = software
+            ? {level: 'software', text: '软件 H.264 · 建议开启快速导出', hardware: false}
+            : {level: 'recorder', text: '实时录制（较慢）'};
+        return capability_cache;
+    }
+
+    async function update_export_capability() {
+        if (!export_capability) return;
+        export_capability.textContent = '正在检测当前浏览器的编码能力…';
+        const cap = await probe_capability();
+        export_capability.textContent = `当前环境：${cap.text}`;
+        export_capability.classList.toggle('warn', cap.level !== 'hardware');
     }
 
     function open_export() {
@@ -1371,8 +1871,13 @@
             mode = 'paused';
             set_play_ui();
         }
-        if (export_url && export_url.startsWith('blob:')) URL.revokeObjectURL(export_url);
         set_export_preview('');
+        if (export_local_url) {
+            URL.revokeObjectURL(export_local_url);
+            export_local_url = '';
+        } else if (export_url && export_url.startsWith('blob:')) {
+            URL.revokeObjectURL(export_url);
+        }
         export_url = '';
         export_name = '';
         export_download.textContent = '下载 MP4';
@@ -1382,6 +1887,7 @@
         export_progress.classList.add('hidden');
         export_progress_fill.style.width = '0%';
         modal.classList.remove('hidden');
+        update_export_capability();
     }
 
     function close_export_modal() {
@@ -1449,15 +1955,13 @@
     }
 
     async function init() {
-        if (export_foot && static_mode) {
-            export_foot.textContent = 'MP4 / WebM · 1080p · 30 fps';
-        }
+        update_export_foot();
+        update_ratio_labels();
         seed = hash_id(id || 'music-marbles');
         if (!id) {
             show_expired('这条链接里没有轨道编号。');
             return;
         }
-
         try {
             if (!STATIC_HOST) {
                 const resp = await fetch(`/api/tracks/${encodeURIComponent(id)}`);
@@ -1481,6 +1985,25 @@
 
             title_el.textContent = data.title || '音乐弹珠';
             document.title = `${data.title || '音乐弹珠'} — 音乐弹珠`;
+            if (data.source) {
+                track_status.textContent = data.builtin ? data.source : `网络曲库 · ${data.source}`;
+            }
+            if (track_source) {
+                if (data.sourceUrl) {
+                    track_source.href = data.sourceUrl;
+                    track_source.classList.remove('hidden');
+                } else {
+                    track_source.removeAttribute('href');
+                    track_source.classList.add('hidden');
+                }
+            }
+            if (!has_seed_query) {
+                const server_seed = Number(data.seed);
+                if (Number.isFinite(server_seed) && server_seed > 0) {
+                    map_seed = Math.floor(server_seed) >>> 0;
+                }
+            }
+            seed = map_seed || hash_id(id || 'music-marbles');
             if (data.settings && typeof data.settings.walls === 'boolean') {
                 walls_enabled = data.settings.walls;
             }
@@ -1497,7 +2020,8 @@
             update_progress();
 
             if (static_mode) {
-                track_status.textContent = '静态演示 · 内置曲目';
+                track_status.textContent = data.source ? `静态演示 · ${data.source}` : '静态演示 · 内置曲目';
+                update_export_foot();
                 const foot = document.querySelector('.watch-foot span:last-child');
                 if (foot) foot.textContent = 'GitHub Pages 静态演示 · 内置曲目可播放与导出';
                 const modal_copy = document.querySelector('.modal-copy');
@@ -1543,6 +2067,7 @@
     });
     toggle_button.addEventListener('click', toggle_pause);
     restart_button.addEventListener('click', restart_run);
+    if (reroll_button) reroll_button.addEventListener('click', reroll_map);
     mute_button.addEventListener('click', toggle_mute);
     extend_button.addEventListener('click', extend_content);
     share_button.addEventListener('click', async () => {
@@ -1569,6 +2094,22 @@
             play_element_from(elapsed_seconds());
             toast('已切换到媒体通道；仍无声请检查系统音量和标签页静音。');
             start_audio_watchdog();
+        });
+    }
+    if (fast_export_input) {
+        fast_export = read_fast_pref();
+        fast_export_input.checked = fast_export;
+        fast_export_input.addEventListener('change', () => {
+            fast_export = fast_export_input.checked;
+            save_fast_pref(fast_export);
+            update_export_foot();
+            update_ratio_labels();
+        });
+    }
+    for (const button of theme_buttons) {
+        button.addEventListener('click', () => {
+            if (exporting || mode === 'loading' || mode === 'expired') return;
+            set_background(button.dataset.bg);
         });
     }
     download_button.addEventListener('click', open_export);

@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 /*
- * Builds the bundled demo tracks from the MIDI data in music/music.js.
+ * Builds the bundled demo tracks from MIDI data:
  *
  *   builtins/<slug>/notes.json  visual notes (merged chords, seconds)
  *   builtins/<slug>/score.json  every note, for tools/synth_builtin.py
- *   builtins/manifest.json      titles, durations, URLs
+ *   builtins/manifest.json      titles, sources, durations, URLs
  *
- * Usage: node tools/build_builtins.js
+ * Sources:
+ *   - music/music.js: the original MusicMarbles MIDI library (public-domain
+ *     compositions, original project: https://github.com/AndrewB330/MusicMarbles)
+ *
+ * Usage: node tools/build_builtins.js [slug ...]
  */
 'use strict';
 
@@ -23,13 +27,37 @@ vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(path.join(root, 'music/music.js'), 'utf8') + '; this.music = music;', ctx);
 const MUSIC = ctx.music;
 
+const SOURCE_ORIGINAL = {
+    sourceId: 'musicmarbles',
+    source: '原项目曲库',
+    license: '公版作品',
+    sourceUrl: 'https://github.com/AndrewB330/MusicMarbles'
+};
+
 const TRACKS = [
-    {song: 0, slug: 'mozart-rondo', title: 'Rondo Alla Turca', subtitle: 'Mozart', cap: 75},
-    {song: 1, slug: 'mountain-king', title: 'In the Hall of the Mountain King', subtitle: 'Grieg', cap: 75},
-    {song: 4, slug: 'entertainer', title: 'The Entertainer', subtitle: 'Scott Joplin', cap: 75}
+    {
+        song: 0, slug: 'mozart-rondo', title: '土耳其进行曲', subtitle: '莫扎特',
+        cap: 75, ...SOURCE_ORIGINAL
+    },
+    {
+        song: 1, slug: 'mountain-king', title: '山魔王的宫殿', subtitle: '格里格',
+        cap: 75, ...SOURCE_ORIGINAL
+    },
+    {
+        song: 4, slug: 'entertainer', title: '演艺人', subtitle: '斯科特·乔普林',
+        cap: 75, ...SOURCE_ORIGINAL
+    },
+    {
+        song: 5, slug: 'sugar-plum', title: '糖梅仙子之舞', subtitle: '柴可夫斯基',
+        cap: 75, ...SOURCE_ORIGINAL
+    }
 ];
 
 const MERGE_WINDOW_MS = 80;
+
+function load_song(spec) {
+    return MUSIC[spec.song];
+}
 
 function build_song(midi, cap) {
     let track_id = 0;
@@ -91,11 +119,26 @@ function write_wav(slug) {
     fs.unlinkSync(wav);
 }
 
-fs.mkdirSync(outDir, {recursive: true});
-const manifest = [];
+const requested = process.argv.slice(2).filter((arg) => !arg.startsWith('-'));
+const selected = requested.length
+    ? TRACKS.filter((spec) => requested.includes(spec.slug))
+    : TRACKS;
+if (!selected.length) {
+    console.error('No matching track slugs. Available: ' + TRACKS.map((t) => t.slug).join(', '));
+    process.exit(1);
+}
 
-for (const spec of TRACKS) {
-    const built = build_song(MUSIC[spec.song], spec.cap);
+fs.mkdirSync(outDir, {recursive: true});
+
+// Keep metadata for tracks that were not rebuilt in this invocation.
+let previous = [];
+try {
+    previous = JSON.parse(fs.readFileSync(path.join(outDir, 'manifest.json'), 'utf8')).tracks || [];
+} catch (err) { /* first run */ }
+const manifestById = new Map(previous.map((item) => [item.id, item]));
+
+for (const spec of selected) {
+    const built = build_song(load_song(spec), spec.cap);
     const dir = path.join(outDir, spec.slug);
     fs.mkdirSync(dir, {recursive: true});
 
@@ -120,10 +163,14 @@ for (const spec of TRACKS) {
     write_wav(spec.slug);
 
     const stat = fs.statSync(path.join(dir, 'audio.mp3'));
-    manifest.push({
+    manifestById.set('builtin-' + spec.slug, {
         id: 'builtin-' + spec.slug,
         title: spec.title,
         subtitle: spec.subtitle,
+        sourceId: spec.sourceId,
+        source: spec.source,
+        license: spec.license,
+        sourceUrl: spec.sourceUrl,
         duration: built.duration,
         notes: `/builtins/${spec.slug}/notes.json`,
         audio: `/builtins/${spec.slug}/audio.mp3`,
@@ -132,6 +179,10 @@ for (const spec of TRACKS) {
     });
     console.log(`${spec.slug}: ${built.visual_notes.length} bars, ${built.duration.toFixed(1)}s, ${(stat.size / 1024 / 1024).toFixed(1)} MB`);
 }
+
+const manifest = TRACKS
+    .map((spec) => manifestById.get('builtin-' + spec.slug))
+    .filter(Boolean);
 
 fs.writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify({tracks: manifest}, null, 2));
 console.log('wrote', path.join(outDir, 'manifest.json'));

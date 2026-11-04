@@ -10,7 +10,7 @@
   },
   "scripts": {
     "start": "node server/index.js",
-    "test": "node tools/verify_engine.js",
+    "test": "node tools/verify_engine.js && node tools/verify_sources.js",
     "verify": "node tools/verify_engine.js",
     "build:builtins": "node tools/build_builtins.js",
     "build:basic-pitch": "esbuild scripts/transcribe-worker.js --bundle --format=iife --platform=browser --target=es2020 --outfile=scripts/dist/transcribe-worker.js"
@@ -34,6 +34,7 @@
   "devDependencies": {
     "@spotify/basic-pitch": "^1.0.1",
     "@tensorflow/tfjs": "^3.21.0",
+    "@tonejs/midi": "^2.0.28",
     "esbuild": "^0.24.2",
     "puppeteer-core": "^23.11.1"
   }

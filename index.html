@@ -4,10 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音乐弹珠 — 把一首歌变成一条弹珠轨道</title>
-    <meta name="description" content="导入音频，把音符变成弹珠轨道。生成分享链接，导出 9:16、16:9、1:1、4:5 视频。链接与导出内容保留 10 分钟。">
-    <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="styles/reset.css?v=20261031c">
-    <link rel="stylesheet" href="styles/landing.css?v=20261031c">
+    <meta name="description" content="导入音频、搜索 Incompetech 纯音乐曲库或选择内置曲目，把音符变成弹珠轨道。生成分享链接，导出 9:16、16:9、1:1、4:5 视频。链接与导出内容保留 10 分钟。">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <link rel="manifest" href="site.webmanifest">
+    <meta name="theme-color" content="#0B101B">
+    <link rel="stylesheet" href="styles/reset.css?v=20261103d">
+    <link rel="stylesheet" href="styles/landing.css?v=20261103f">
     <script>window.MUSIC_MARBLES_STATIC = window.MUSIC_MARBLES_STATIC || /(^|\.)github\.io$/i.test(location.hostname) || location.protocol === 'file:';</script>
 </head>
 <body>
@@ -35,7 +39,7 @@
             </a>
             <nav>
                 <a href="#make">01 制作</a>
-                <a href="#builtins">02 内置</a>
+                <a href="#source-tabs">02 曲库</a>
                 <a href="#how">03 原理</a>
             </nav>
         </div>
@@ -64,34 +68,60 @@
             </dl>
         </section>
 
-        <section class="workspace" id="make">
-            <div class="panel upload-panel">
-                <div class="panel-head">
-                    <div>
-                        <p class="kicker">01 / 添加音频</p>
-                        <h2>从一首歌开始</h2>
-                    </div>
-                    <p class="format-note">MP3 · WAV · M4A · FLAC</p>
+        <section class="studio panel" id="make">
+            <div class="studio-head">
+                <div>
+                    <p class="kicker">01 / 制作</p>
+                    <h2>选一首歌，生成一条轨道</h2>
                 </div>
+                <p class="format-note">MP3 · WAV · M4A · FLAC</p>
+            </div>
 
+            <div class="source-tabs" id="source-tabs" role="tablist" aria-label="音频来源">
+                <button class="source-tab active" id="source-tab-upload" type="button" role="tab" aria-selected="true" aria-controls="upload-view" data-mode="upload">上传音频</button>
+                <button class="source-tab" id="source-tab-online" type="button" role="tab" aria-selected="false" aria-controls="online-view" data-mode="online">网络曲库</button>
+                <button class="source-tab" id="source-tab-builtin" type="button" role="tab" aria-selected="false" aria-controls="builtin-view" data-mode="builtin">内置曲目</button>
+            </div>
+
+            <div class="source-view" id="upload-view" role="tabpanel" aria-labelledby="source-tab-upload">
                 <label class="dropzone" id="dropzone">
                     <input type="file" id="file-input" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac">
                     <span class="drop-icon" aria-hidden="true"><svg class="icon"><use href="#i-upload"></use></svg></span>
                     <span class="drop-title" id="drop-title">拖入音频，或点击选择</span>
                     <span class="drop-sub" id="drop-sub">最长 6 分钟 · 单文件 80 MB</span>
                 </label>
+                <p class="source-hint">没有文件？<button class="inline-link" id="browse-online" type="button">从网络曲库选一首</button>，或<button class="inline-link" id="browse-builtin" type="button">使用内置曲目</button>。</p>
+            </div>
 
-                <div class="file-row hidden" id="file-row">
-                    <div class="file-meta">
-                        <span class="file-dot"></span>
-                        <div>
-                            <strong id="file-name">track.mp3</strong>
-                            <small id="file-size">0 MB</small>
-                        </div>
-                    </div>
-                    <button class="text-button" id="clear-file" type="button">更换文件</button>
+            <div class="source-view hidden" id="online-view" role="tabpanel" aria-labelledby="source-tab-online">
+                <form class="song-search" id="song-search" autocomplete="off">
+                    <input type="search" id="song-query" maxlength="80" placeholder="曲名、乐器或情绪，如 piano / 钢琴 / 古筝">
+                    <button class="secondary-button" id="song-search-button" type="submit">搜索</button>
+                </form>
+                <p class="library-note" id="online-copy">搜索 Incompetech 纯音乐库：Kevin MacLeod 的器乐作品，无需注册与代理，支持中文乐器或情绪关键词。</p>
+                <div class="song-list" id="song-list"></div>
+                <button class="more-button hidden" id="song-more" type="button">加载更多</button>
+            </div>
+
+            <div class="source-view hidden" id="builtin-view" role="tabpanel" aria-labelledby="source-tab-builtin">
+                <p class="library-note" id="builtin-copy">四首公版作品；点一首即可生成链接。内置曲目永久保留。</p>
+                <div class="builtin-list" id="builtin-list">
+                    <div class="builtin-skeleton"></div>
+                    <div class="builtin-skeleton"></div>
+                    <div class="builtin-skeleton"></div>
                 </div>
+            </div>
 
+            <div class="selection-row hidden" id="selection-row">
+                <span class="selection-kind" id="selection-kind">已选</span>
+                <div class="selection-info">
+                    <strong id="selection-title">track.mp3</strong>
+                    <small id="selection-meta">0 MB</small>
+                </div>
+                <button class="text-button" id="selection-clear" type="button">取消选择</button>
+            </div>
+
+            <div class="settings-grid">
                 <div class="option-row">
                     <div class="option-copy">
                         <strong>墙壁</strong>
@@ -110,52 +140,37 @@
                         <svg class="icon button-arrow" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
                     </button>
                 </div>
-
-                <div class="stage hidden" id="stage">
-                    <div class="stage-line">
-                        <span id="stage-label">准备中…</span>
-                        <span id="stage-pct">0%</span>
-                    </div>
-                    <div class="stage-track"><div id="stage-fill"></div></div>
-                    <p id="stage-hint">处理过程在浏览器内完成，直到轨道准备好。</p>
-                </div>
-
-                <div class="error-box hidden" id="error-box"></div>
-
-                <div class="result hidden" id="result">
-                    <div class="result-head">
-                        <p class="kicker">链接已生成</p>
-                        <h3 id="result-title">这条轨道可以打开了</h3>
-                    </div>
-                    <div class="link-row">
-                        <input type="text" id="result-link" readonly>
-                        <button class="secondary-button" id="copy-link" type="button">复制</button>
-                    </div>
-                    <p class="expiry-note" id="result-expiry">链接保留 10 分钟。打开后可以手动延长。</p>
-                    <div class="result-actions">
-                        <a class="primary-button" id="open-link" href="#" target="_blank" rel="noopener">
-                            <span>打开轨道</span>
-                            <svg class="icon" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
-                        </a>
-                        <button class="text-button" id="start-over" type="button">再做一条</button>
-                    </div>
-                </div>
             </div>
 
-            <aside class="panel builtin-panel" id="builtins">
-                <div class="panel-head">
-                    <div>
-                        <p class="kicker">02 / 内置曲目</p>
-                        <h2>没有文件也可以</h2>
-                    </div>
+            <div class="stage hidden" id="stage">
+                <div class="stage-line">
+                    <span id="stage-label">准备中…</span>
+                    <span id="stage-pct">0%</span>
                 </div>
-                <p class="builtin-copy">三首公版作品，点一首即可生成链接。内置曲目永久保留。</p>
-                <div class="builtin-list" id="builtin-list">
-                    <div class="builtin-skeleton"></div>
-                    <div class="builtin-skeleton"></div>
-                    <div class="builtin-skeleton"></div>
+                <div class="stage-track"><div id="stage-fill"></div></div>
+                <p id="stage-hint">处理过程在浏览器内完成，直到轨道准备好。</p>
+            </div>
+
+            <div class="error-box hidden" id="error-box"></div>
+
+            <div class="result hidden" id="result">
+                <div class="result-head">
+                    <p class="kicker">链接已生成</p>
+                    <h3 id="result-title">这条轨道可以打开了</h3>
                 </div>
-            </aside>
+                <div class="link-row">
+                    <input type="text" id="result-link" readonly>
+                    <button class="secondary-button" id="copy-link" type="button">复制</button>
+                </div>
+                <p class="expiry-note" id="result-expiry">链接保留 10 分钟。打开后可以手动延长。</p>
+                <div class="result-actions">
+                    <a class="primary-button" id="open-link" href="#" target="_blank" rel="noopener">
+                        <span>打开轨道</span>
+                        <svg class="icon" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
+                    </a>
+                    <button class="text-button" id="start-over" type="button">再做一条</button>
+                </div>
+            </div>
         </section>
 
         <section class="how" id="how">
@@ -167,7 +182,7 @@
                 <article>
                     <span class="step-number">01</span>
                     <h3>导入</h3>
-                    <p>选择音频或内置曲目。浏览器找出音符的起点与音高，音频不会先上传。</p>
+                    <p>选择音频、网络曲库或内置曲目。浏览器找出音符的起点与音高，音频不会先上传。</p>
                 </article>
                 <article>
                     <span class="step-number">02</span>
@@ -189,6 +204,6 @@
     </main>
 
     <div class="toast" id="toast"></div>
-    <script src="scripts/landing.js?v=20261031c"></script>
+    <script src="scripts/landing.js?v=20261103g"></script>
 </body>
 </html>

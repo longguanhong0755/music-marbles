@@ -140,7 +140,7 @@
             this.room = new Path2D();
             this.posts = new Path2D();
             this.bays = [];
-            this.surfaces = new WeakMap();
+            this.snapshots = new WeakMap();
             this.build_geometry();
         }
 
@@ -204,35 +204,38 @@
             }
         }
 
-        surface_for(view) {
+        snapshot_for(view) {
             const dpr = view.dpr || 1;
-            const width = Math.max(1, Math.round(view.width * dpr));
-            const height = Math.max(1, Math.round(view.height * dpr));
-            let surface = this.surfaces.get(view);
-            if (!surface || surface.canvas.width !== width || surface.canvas.height !== height) {
+            const margin = 32;
+            const width = Math.max(1, Math.round((view.width + margin * 2) * dpr));
+            const height = Math.max(1, Math.round((view.height + margin * 2) * dpr));
+            let snap = this.snapshots.get(view);
+            if (!snap || snap.canvas.width !== width || snap.canvas.height !== height) {
                 const canvas = document.createElement('canvas');
                 canvas.width = width;
                 canvas.height = height;
-                surface = {
+                snap = {
                     canvas,
-                    ctx: canvas.getContext('2d')
+                    ctx: canvas.getContext('2d'),
+                    margin,
+                    dpr,
+                    camera: null,
+                    scale: 0
                 };
-                this.surfaces.set(view, surface);
+                this.snapshots.set(view, snap);
             }
-            return surface;
+            return snap;
         }
 
-        draw(view) {
+        render_snapshot(view, snap) {
             const scale = view.scale;
-            if (!(scale > 0)) return;
-
-            const dpr = view.dpr || 1;
-            const w = view.width;
-            const h = view.height;
-            const ox = view.offset[0];
-            const oy = view.offset[1];
-            const surface = this.surface_for(view);
-            const octx = surface.ctx;
+            const dpr = snap.dpr;
+            const margin = snap.margin;
+            const w = view.width + margin * 2;
+            const h = view.height + margin * 2;
+            const ox = snap.camera[0] + margin;
+            const oy = snap.camera[1] + margin;
+            const octx = snap.ctx;
 
             octx.setTransform(dpr, 0, 0, dpr, 0, 0);
             octx.clearRect(0, 0, w, h);
@@ -281,8 +284,46 @@
             octx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
             octx.fill(this.posts);
             octx.restore();
+        }
 
-            view.ctx.drawImage(surface.canvas, 0, 0, w, h);
+        draw(view) {
+            const scale = view.scale;
+            if (!(scale > 0)) return;
+
+            const snap = this.snapshot_for(view);
+            if (snap.scale !== scale) {
+                snap.scale = scale;
+                snap.camera = null;
+            }
+
+            let dx = 0;
+            let dy = 0;
+            if (!snap.camera) {
+                snap.camera = [view.offset[0], view.offset[1]];
+                this.render_snapshot(view, snap);
+            } else {
+                dx = view.offset[0] - snap.camera[0];
+                dy = view.offset[1] - snap.camera[1];
+                if (Math.abs(dx) > snap.margin || Math.abs(dy) > snap.margin) {
+                    snap.camera = [view.offset[0], view.offset[1]];
+                    this.render_snapshot(view, snap);
+                    dx = 0;
+                    dy = 0;
+                }
+            }
+
+            // The wall is static in world space. A camera move is a pure
+            // translation of the screen-space wall image, so shift the cached
+            // snapshot instead of rebuilding the grid every frame.
+            const ix = Math.round(dx);
+            const iy = Math.round(dy);
+            view.ctx.drawImage(
+                snap.canvas,
+                ix - snap.margin,
+                iy - snap.margin,
+                view.width + snap.margin * 2,
+                view.height + snap.margin * 2
+            );
         }
     }
 

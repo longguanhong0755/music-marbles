@@ -51,6 +51,22 @@ let API = (() => {
         V_MINUS: {sx: -1, sy: 1}
     };
 
+    function mulberry32(seed) {
+        let a = seed >>> 0;
+        return function () {
+            a |= 0;
+            a = (a + 0x6D2B79F5) | 0;
+            let t = Math.imul(a ^ (a >>> 15), 1 | a);
+            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+    }
+
+    function normalize_seed(value) {
+        const n = Number(value);
+        return Number.isFinite(n) ? (Math.floor(n) >>> 0) : 0;
+    }
+
     let note_times = [];
     let planks = [];
     let path = [];
@@ -59,6 +75,13 @@ let API = (() => {
     let play_state = null;
     let last_hit = -1;
     let intro_enabled = false;
+    // seed 0 keeps the original deterministic layout. Every other seed drives
+    // the candidate ordering and an optional whole-layout mirror, so the same
+    // link always rebuilds the same map while a new seed gets a visibly
+    // different one.
+    let map_seed = 0;
+    let mirror_x = 1;
+    let mirror_y = 1;
     let stats = {
         notes: 0,
         planks: 0,
@@ -158,8 +181,9 @@ let API = (() => {
 
     // Depth-first search over the left/right turn at each note. The path stays
     // compact because candidates are tried nearest-to-origin first (with a
-    // one-step lookahead); the search backtracks out of tight corners.
-    function build_compact() {
+    // one-step lookahead); the search backtracks out of tight corners. A
+    // seeded RNG perturbs that ordering without weakening any validity check.
+    function build_compact(rng) {
         const n = note_times.length;
         if (!n) return null;
 
@@ -301,9 +325,14 @@ let API = (() => {
                 } else {
                     score = Math.hypot(vx, vy);
                 }
+                if (rng) score *= 1 + (rng() * 2 - 1) * 0.45;
                 cands.push({sign, bar, score});
             }
             cands.sort((a, b) => a.score - b.score);
+            // Occasionally try the far turn first. The DFS backtracks, so a
+            // dead end only costs search nodes; the final layout still has to
+            // pass every clearance check.
+            if (rng && cands.length > 1 && rng() < 0.22) cands.reverse();
 
             for (let k = 0; k < cands.length; k++) {
                 const c = cands[k];
@@ -405,10 +434,48 @@ let API = (() => {
         return {bars: verts, verts};
     }
 
+    function mirror_bar(bar, mx, my) {
+        if (mx === 1 && my === 1) return bar;
+        const ax = bar.ax * mx;
+        const ay = bar.ay * my;
+        const bx = bar.bx2 * mx;
+        const by = bar.by2 * my;
+        return Object.assign({}, bar, {
+            x: bar.x * mx,
+            y: bar.y * my,
+            cx: bar.cx * mx,
+            cy: bar.cy * my,
+            ax, ay,
+            bx2: bx,
+            by2: by,
+            minx: Math.min(ax, bx),
+            maxx: Math.max(ax, bx),
+            miny: Math.min(ay, by),
+            maxy: Math.max(ay, by)
+        });
+    }
+
     function build_world() {
-        const layout = build_compact() || build_staircase_fallback();
-        planks = layout.bars;
-        path = layout.verts.map(p => ({x: p.x, y: p.y, vertical: p.vertical}));
+        let layout = null;
+        if (map_seed) {
+            // A wild seed can paint the DFS into a corner. Try a few derived
+            // sub-seeds before giving up on the compact layout; all attempts
+            // are deterministic for a given link.
+            for (let attempt = 0; attempt < 4 && !layout; attempt++) {
+                const attempt_seed = (map_seed + Math.imul(attempt, 0x9E3779B9)) >>> 0;
+                layout = build_compact(mulberry32(attempt_seed));
+            }
+        } else {
+            layout = build_compact(null);
+        }
+        if (!layout) layout = build_staircase_fallback();
+
+        planks = layout.bars.map(p => mirror_bar(p, mirror_x, mirror_y));
+        path = layout.verts.map(p => ({
+            x: p.x * mirror_x,
+            y: p.y * mirror_y,
+            vertical: p.vertical
+        }));
 
         let minx = 0, maxx = 0, miny = 0, maxy = 0;
         for (const p of planks) {
@@ -428,8 +495,8 @@ let API = (() => {
         start = {
             x: 0,
             y: 0,
-            vx: first.sx / Math.SQRT2 * SPEED,
-            vy: first.sy / Math.SQRT2 * SPEED
+            vx: first.sx * mirror_x / Math.SQRT2 * SPEED,
+            vy: first.sy * mirror_y / Math.SQRT2 * SPEED
         };
     }
 
@@ -442,8 +509,10 @@ let API = (() => {
             enabled: intro_enabled,
             ms: intro_enabled ? INTRO_MS : 0,
             distance: intro_enabled ? INTRO_DIST : 0,
-            x: intro_enabled ? INTRO_DIST / Math.SQRT2 : 0,
-            y: intro_enabled ? INTRO_DIST / Math.SQRT2 : 0,
+            x: intro_enabled ? mirror_x * INTRO_DIST / Math.SQRT2 : 0,
+            y: intro_enabled ? mirror_y * INTRO_DIST / Math.SQRT2 : 0,
+            dir_x: mirror_x,
+            dir_y: mirror_y,
             speed: SPEED,
             accel: SPEED / (INTRO_MS / 1000)
         };
@@ -455,13 +524,13 @@ let API = (() => {
     }
 
     function begin_song() {
-        const ox = intro_enabled ? INTRO_DIST / Math.SQRT2 : 0;
-        const oy = intro_enabled ? INTRO_DIST / Math.SQRT2 : 0;
+        const ox = intro_enabled ? mirror_x * INTRO_DIST / Math.SQRT2 : 0;
+        const oy = intro_enabled ? mirror_y * INTRO_DIST / Math.SQRT2 : 0;
         play_state = {
             x: ox,
             y: oy,
-            vx: SPEED / Math.SQRT2,
-            vy: SPEED / Math.SQRT2,
+            vx: mirror_x * SPEED / Math.SQRT2,
+            vy: mirror_y * SPEED / Math.SQRT2,
             time: 0,
             hit_count: 0,
             last_hit_time: 0,
@@ -470,7 +539,10 @@ let API = (() => {
         last_hit = -1;
     }
 
-    function init_generator() {
+    function init_generator(seed) {
+        map_seed = normalize_seed(seed);
+        mirror_x = map_seed && (map_seed & 1) ? -1 : 1;
+        mirror_y = map_seed && (map_seed & 2) ? -1 : 1;
         note_times.sort((a, b) => a - b);
         planks = [];
         path = [];
@@ -484,7 +556,8 @@ let API = (() => {
             vertical: 0,
             horizontal: 0,
             speed: SPEED,
-            intro: intro_enabled
+            intro: intro_enabled,
+            seed: map_seed
         };
         if (!note_times.length) return;
 
@@ -652,6 +725,7 @@ let API = (() => {
         reset_playback,
         begin_song,
         init_generator,
+        get_seed: () => map_seed,
         generate_world_limited,
         get_generator_progress,
         update_main_world,

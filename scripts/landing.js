@@ -6,10 +6,6 @@
     const dropzone = document.getElementById('dropzone');
     const drop_title = document.getElementById('drop-title');
     const drop_sub = document.getElementById('drop-sub');
-    const file_row = document.getElementById('file-row');
-    const file_name = document.getElementById('file-name');
-    const file_size = document.getElementById('file-size');
-    const clear_file = document.getElementById('clear-file');
     const title_input = document.getElementById('title-input');
     const walls_toggle = document.getElementById('walls-toggle');
     const generate_button = document.getElementById('generate-button');
@@ -27,7 +23,28 @@
     const copy_link = document.getElementById('copy-link');
     const open_link = document.getElementById('open-link');
     const start_over = document.getElementById('start-over');
+    const source_tabs = document.getElementById('source-tabs');
+    const source_tab_upload = document.getElementById('source-tab-upload');
+    const source_tab_online = document.getElementById('source-tab-online');
+    const source_tab_builtin = document.getElementById('source-tab-builtin');
+    const upload_view = document.getElementById('upload-view');
+    const online_view = document.getElementById('online-view');
+    const builtin_view = document.getElementById('builtin-view');
+    const browse_online = document.getElementById('browse-online');
+    const browse_builtin = document.getElementById('browse-builtin');
     const builtin_list = document.getElementById('builtin-list');
+    const builtin_copy = document.getElementById('builtin-copy');
+    const song_form = document.getElementById('song-search');
+    const song_query = document.getElementById('song-query');
+    const song_search_button = document.getElementById('song-search-button');
+    const online_copy = document.getElementById('online-copy');
+    const song_list = document.getElementById('song-list');
+    const song_more = document.getElementById('song-more');
+    const selection_row = document.getElementById('selection-row');
+    const selection_kind = document.getElementById('selection-kind');
+    const selection_title = document.getElementById('selection-title');
+    const selection_meta = document.getElementById('selection-meta');
+    const selection_clear = document.getElementById('selection-clear');
     const toast_el = document.getElementById('toast');
 
     const SAMPLE_RATE = 22050;
@@ -35,16 +52,31 @@
     const MAX_BARS = 1000;
     const MERGE_MS = 80;
     const STATIC_MODE = !!window.MUSIC_MARBLES_STATIC;
+    const ONLINE_COPY_IDLE = '搜索 Incompetech 纯音乐库：Kevin MacLeod 的器乐作品，无需注册与代理，支持中文乐器或情绪关键词。';
+    const SOURCE_PROVIDER = {
+        id: 'incompetech',
+        name: 'Incompetech',
+        homepage: 'https://incompetech.com/music/royalty-free/music.html',
+        license: 'CC BY 4.0'
+    };
 
     let selected_file = null;
     let selected_builtin = null;
+    let selected_source = null;
     let builtins = [];
+    let source_results = [];
+    let source_query = '';
+    let source_page = 0;
+    let source_searching = false;
+    let source_provider = {...SOURCE_PROVIDER};
     let busy = false;
     let static_demo = STATIC_MODE;
     let preview_audio = null;
     let preview_button = null;
     let toast_timer = 0;
     let walls_on = true;
+    let source_mode = 'upload';
+    let auto_title = '';
 
     function set_walls(value) {
         walls_on = !!value;
@@ -56,9 +88,22 @@
         return new URL(String(path || '').replace(/^\//, ''), document.baseURI).href;
     }
 
+    function random_seed() {
+        try {
+            const buf = new Uint32Array(1);
+            crypto.getRandomValues(buf);
+            if (buf[0]) return buf[0];
+        } catch (err) { /* 回退到 Math.random */ }
+        return (Math.floor(Math.random() * 0xFFFFFFFF) >>> 0) || 1;
+    }
+
     function normalize_track(track) {
         return {
             ...track,
+            sourceId: track.sourceId || 'builtin',
+            source: track.source || '内置曲库',
+            license: track.license || '公版作品',
+            sourceUrl: track.sourceUrl || '',
             audio: asset_url(track.audio),
             notes: asset_url(track.notes)
         };
@@ -93,15 +138,31 @@
     function set_busy(value) {
         busy = value;
         generate_button.disabled = value;
-        generate_label.textContent = value ? '处理中…' : '生成分享链接';
+        update_generate_label();
         file_input.disabled = value;
-        clear_file.disabled = value;
         title_input.disabled = value;
         walls_toggle.disabled = value;
+        selection_clear.disabled = value;
+        if (source_tabs) {
+            source_tabs.querySelectorAll('.source-tab').forEach((tab) => {
+                tab.disabled = value;
+            });
+        }
         builtin_list.querySelectorAll('.builtin-card').forEach((card) => {
             card.style.pointerEvents = value ? 'none' : '';
             card.style.opacity = value ? '0.55' : '';
         });
+        if (song_list) {
+            song_list.querySelectorAll('.song-card').forEach((card) => {
+                card.style.pointerEvents = value ? 'none' : '';
+                card.style.opacity = value ? '0.55' : '';
+            });
+        }
+        if (song_query) song_query.disabled = value;
+        if (song_search_button && !source_searching) song_search_button.disabled = value;
+        if (song_more && !source_searching) song_more.disabled = value;
+        if (browse_online) browse_online.disabled = value;
+        if (browse_builtin) browse_builtin.disabled = value;
     }
 
     function duration_label(seconds) {
@@ -126,10 +187,40 @@
         return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
     }
 
+    function reset_dropzone() {
+        file_input.value = '';
+        drop_title.textContent = '拖入音频，或点击选择';
+        drop_sub.textContent = '最长 6 分钟 · 单文件 80 MB';
+    }
+
+    function show_selection(kind, title, meta) {
+        selection_kind.textContent = kind;
+        selection_title.textContent = title;
+        selection_meta.textContent = meta;
+        selection_row.classList.remove('hidden');
+    }
+
+    function hide_selection() {
+        selection_row.classList.add('hidden');
+    }
+
+    function set_auto_title(value) {
+        const next = String(value || '').slice(0, 80);
+        if (!title_input.value.trim() || title_input.value === auto_title) {
+            title_input.value = next;
+            auto_title = next;
+        }
+    }
+
+    function clear_auto_title() {
+        if (auto_title && title_input.value === auto_title) title_input.value = '';
+        auto_title = '';
+    }
+
     function set_file(file) {
         if (!file) return;
         if (static_demo) {
-            toast('静态演示只支持内置曲目；上传请本地运行 npm start。');
+            toast('静态演示只支持内置曲目；上传与网络曲库请本地运行 npm start。');
             return;
         }
         const name = file.name || 'audio';
@@ -142,27 +233,28 @@
             toast('文件超过 80 MB。');
             return;
         }
+        clear_selection(false);
         selected_file = file;
-        selected_builtin = null;
-        set_selected_card(null);
-        file_name.textContent = name;
-        file_size.textContent = file_label(file);
-        file_row.classList.remove('hidden');
         drop_title.textContent = '文件已就绪';
-        drop_sub.textContent = '点击生成，或更换文件';
-        if (!title_input.value.trim()) {
-            title_input.value = name.replace(/\.[^.]+$/, '').slice(0, 80);
-        }
+        drop_sub.textContent = `${file_label(file)} · 点击可更换`;
+        show_selection('音频', name, `${file_label(file)} · ${ext.toUpperCase()}`);
+        set_auto_title(name.replace(/\.[^.]+$/, ''));
+        update_generate_label();
         clear_error();
         result.classList.add('hidden');
     }
 
-    function clear_selected_file() {
+    function clear_selection(reset_title) {
         selected_file = null;
-        file_input.value = '';
-        file_row.classList.add('hidden');
-        drop_title.textContent = '拖入音频，或点击选择';
-        drop_sub.textContent = '最长 6 分钟 · 单文件 80 MB';
+        selected_builtin = null;
+        selected_source = null;
+        reset_dropzone();
+        set_selected_card(null);
+        set_selected_source_card(null);
+        hide_selection();
+        if (reset_title !== false) clear_auto_title();
+        update_generate_label();
+        clear_error();
     }
 
     function set_selected_card(id) {
@@ -173,19 +265,92 @@
         });
     }
 
-    function select_builtin(track, card) {
+    function select_builtin(track) {
+        clear_selection(false);
         selected_builtin = track;
-        selected_file = null;
-        clear_selected_file();
         set_selected_card(track.id);
-        if (!title_input.value.trim()) title_input.placeholder = track.title;
+        show_selection(
+            '内置曲目',
+            track.title,
+            [track.subtitle, duration_label(track.duration), track.license].filter(Boolean).join(' · ')
+        );
+        set_auto_title(track.title);
+        update_generate_label();
         clear_error();
         result.classList.add('hidden');
+    }
+
+    function set_selected_source_card(token) {
+        if (!song_list) return;
+        song_list.querySelectorAll('.song-card').forEach((card) => {
+            const active = !!token && card.dataset.token === token;
+            card.classList.toggle('selected', active);
+            const label = card.querySelector('.song-select');
+            if (label) label.textContent = active ? '已选' : '使用';
+        });
+    }
+
+    function update_generate_label() {
+        generate_label.textContent = busy
+            ? '处理中…'
+            : (selected_source ? '下载并生成' : '生成分享链接');
+    }
+
+    function select_source(track) {
+        clear_selection(false);
+        selected_source = track;
+        set_selected_source_card(track.token);
+        show_selection(
+            '网络曲目',
+            track.title,
+            [track.artist, duration_label(track.duration), track.license].filter(Boolean).join(' · ')
+        );
+        set_auto_title(track.title);
+        update_generate_label();
+        clear_error();
+        result.classList.add('hidden');
+    }
+
+    function set_mode(mode) {
+        if (static_demo) mode = 'builtin';
+        if (!['upload', 'online', 'builtin'].includes(mode)) mode = 'upload';
+        source_mode = mode;
+        const tabs = [
+            ['upload', source_tab_upload, upload_view],
+            ['online', source_tab_online, online_view],
+            ['builtin', source_tab_builtin, builtin_view]
+        ];
+        for (const [id, tab, view] of tabs) {
+            if (!tab || !view) continue;
+            const active = id === mode;
+            tab.classList.toggle('active', active);
+            tab.setAttribute('aria-selected', active ? 'true' : 'false');
+            view.classList.toggle('hidden', !active);
+        }
+        if (mode === 'online' && !source_results.length && !source_searching && !busy) {
+            search_source(true);
+        }
+    }
+
+    function apply_static_ui() {
+        if (!static_demo) return;
+        if (source_tabs) source_tabs.classList.add('hidden');
+        set_mode('builtin');
     }
 
     function render_builtins(tracks) {
         builtins = (tracks || []).map(normalize_track);
         builtin_list.innerHTML = '';
+        if (builtin_copy) {
+            if (!builtins.length) {
+                builtin_copy.textContent = '没有可用的内置曲目。';
+            } else {
+                const base = `${builtins.length} 首公版作品；点一首即可生成链接。内置曲目永久保留。`;
+                builtin_copy.textContent = static_demo
+                    ? `GitHub Pages 静态演示。${base}上传、纯音乐曲库与 10 分钟链接需本地运行 Node 服务。`
+                    : base;
+            }
+        }
         if (!builtins.length) {
             builtin_list.innerHTML = '<p class="builtin-copy">没有可用的内置曲目。</p>';
             return;
@@ -194,6 +359,7 @@
             const card = document.createElement('div');
             card.className = 'builtin-card';
             card.dataset.id = track.id;
+            card.title = track.sourceUrl ? `${track.source} · ${track.sourceUrl}` : track.source;
             card.innerHTML = `
                 <button class="preview-button" type="button" aria-label="试听 ${escape_html(track.title)}">
                     <svg class="icon icon-play" aria-hidden="true"><use href="#i-play"></use></svg>
@@ -202,13 +368,14 @@
                 <div class="builtin-info">
                     <strong>${escape_html(track.title)}</strong>
                     <small>${escape_html(track.subtitle)} · ${duration_label(track.duration)} · ${track.bars} 根</small>
+                    <em class="builtin-source">${escape_html(track.source)} · ${escape_html(track.license)}</em>
                 </div>
                 <span class="builtin-select">使用</span>
             `;
             card.addEventListener('click', (e) => {
                 if (e.target.closest('.preview-button')) return;
                 if (busy) return;
-                select_builtin(track, card);
+                select_builtin(track);
             });
             const preview = card.querySelector('.preview-button');
             preview.addEventListener('click', (e) => {
@@ -217,14 +384,136 @@
             });
             builtin_list.appendChild(card);
         }
+        if (selected_builtin) set_selected_card(selected_builtin.id);
+    }
+
+    function render_source_results(tracks, append) {
+        if (!song_list) return;
+        if (!append) {
+            source_results = [];
+            song_list.innerHTML = '';
+        }
+        const list = Array.isArray(tracks) ? tracks : [];
+        source_results = source_results.concat(list);
+        if (!append && !list.length) {
+            const empty = document.createElement('p');
+            empty.className = 'song-empty';
+            empty.textContent = '没有找到结果。换个曲名、乐器或情绪再试。';
+            song_list.appendChild(empty);
+            return;
+        }
+        for (const raw of list) {
+            const track = {
+                ...raw,
+                audio: `/api/source/audio?token=${encodeURIComponent(raw.token)}`
+            };
+            const meta = [raw.artist, duration_label(raw.duration), raw.license]
+                .filter(Boolean)
+                .join(' · ');
+            const card = document.createElement('div');
+            card.className = 'song-card';
+            card.dataset.token = raw.token;
+            card.title = raw.attribution ? `${raw.attribution} · ${raw.license}` : `${raw.title} · ${raw.artist}`;
+            card.innerHTML = `
+                <div class="song-info">
+                    <strong>${escape_html(raw.title)}</strong>
+                    <small>${escape_html(meta)}</small>
+                </div>
+                <button class="preview-button" type="button" aria-label="试听 ${escape_html(raw.title)}">
+                    <svg class="icon icon-play" aria-hidden="true"><use href="#i-play"></use></svg>
+                    <svg class="icon icon-pause" aria-hidden="true"><use href="#i-pause"></use></svg>
+                </button>
+                <span class="song-select">使用</span>
+            `;
+            card.addEventListener('click', (e) => {
+                if (e.target.closest('.preview-button')) return;
+                if (busy) return;
+                select_source(track);
+            });
+            const preview = card.querySelector('.preview-button');
+            preview.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggle_preview(track, preview);
+            });
+            song_list.appendChild(card);
+        }
+        if (selected_source) set_selected_source_card(selected_source.token);
+    }
+
+    async function search_source(reset) {
+        if (busy || source_searching) return;
+        const query = reset ? song_query.value.trim() : source_query;
+        if (reset) {
+            source_results = [];
+            source_page = 0;
+            if (song_list) song_list.innerHTML = '';
+            song_more.classList.add('hidden');
+        }
+        const next_page = source_page + 1;
+        source_searching = true;
+        song_search_button.disabled = true;
+        song_more.disabled = true;
+        song_search_button.textContent = query ? '搜索中…' : '读取中…';
+        online_copy.textContent = query
+            ? `正在纯音乐曲库搜索「${query}」…`
+            : '正在读取纯音乐曲库…';
+        try {
+            const params = new URLSearchParams({
+                q: query,
+                page: String(next_page)
+            });
+            const resp = await fetch(`/api/source/search?${params.toString()}`, {cache: 'no-store'});
+            let data = null;
+            try {
+                data = await resp.json();
+            } catch (err) { /* 非 JSON 响应 */ }
+            if (!resp.ok) throw new Error((data && data.error) || '搜索失败');
+            if (data && data.provider) {
+                source_provider = {
+                    id: data.provider.id || source_provider.id,
+                    name: data.provider.name || source_provider.name,
+                    homepage: data.provider.homepage || source_provider.homepage,
+                    license: data.provider.license || source_provider.license
+                };
+            }
+            const tracks = data && Array.isArray(data.tracks) ? data.tracks : [];
+            const total = data && Number.isFinite(Number(data.total))
+                ? Number(data.total)
+                : source_results.length + tracks.length;
+            source_query = query;
+            source_page = next_page;
+            render_source_results(tracks, !reset);
+            if (!source_results.length) {
+                online_copy.textContent = query
+                    ? `没有找到「${query}」，换个关键词或乐器试试。`
+                    : '曲库暂时没有可用的曲目。';
+            } else {
+                const translated = data && data.translatedQuery
+                    && query && data.translatedQuery.toLowerCase() !== query.toLowerCase()
+                    ? `（英文关键词：${data.translatedQuery}）`
+                    : '';
+                const summary = query
+                    ? `${source_provider.name} 找到 ${total} 首纯音乐${translated}`
+                    : `${source_provider.name} 曲库共 ${total} 首纯音乐`;
+                online_copy.textContent = `${summary}，已显示 ${source_results.length} 首。点「使用」选中，生成时自动下载。`;
+            }
+            song_more.classList.toggle('hidden', !(data && data.hasMore));
+        } catch (err) {
+            online_copy.textContent = '搜索失败：' + err.message;
+            if (!source_results.length) song_more.classList.add('hidden');
+        } finally {
+            source_searching = false;
+            song_search_button.disabled = busy;
+            song_more.disabled = busy;
+            song_search_button.textContent = '搜索';
+        }
     }
 
     function set_preview_state(button, playing) {
         if (!button) return;
         button.classList.toggle('playing', !!playing);
-        const title = button.closest('.builtin-card')
-            ? button.closest('.builtin-card').querySelector('.builtin-info strong')
-            : null;
+        const card = button.closest('.builtin-card, .song-card');
+        const title = card ? card.querySelector('.builtin-info strong, .song-info strong') : null;
         button.setAttribute('aria-label', `${playing ? '暂停试听' : '试听'}${title ? ' ' + title.textContent : ''}`);
     }
 
@@ -445,16 +734,7 @@
         result.scrollIntoView({behavior: 'smooth', block: 'nearest'});
     }
 
-    async function generate_from_file() {
-        const file = selected_file;
-        if (!file) return;
-        if (static_demo) {
-            show_error('GitHub Pages 是静态演示，上传与分享链接需要本地运行 Node 服务。');
-            return;
-        }
-        set_busy(true);
-        clear_error();
-        result.classList.add('hidden');
+    async function analyze_and_upload(file, fallback_title, origin) {
         set_stage('解码音频', 4, '正在浏览器内读取文件。');
         let buffer;
         try {
@@ -498,7 +778,7 @@
         }
 
         set_stage('上传音频', 82, '服务器会裁剪音频并生成 MP3。');
-        const title = title_input.value.trim() || file.name.replace(/\.[^.]+$/, '') || '未命名轨道';
+        const title = title_input.value.trim() || fallback_title || '未命名轨道';
         const fd = new FormData();
         fd.append('audio', file, file.name || 'audio.mp3');
         fd.append('title', title);
@@ -507,6 +787,9 @@
         fd.append('audioOffset', built.audioOffset.toFixed(3));
         fd.append('padStart', built.padStart.toFixed(3));
         fd.append('walls', walls_on ? '1' : '0');
+        fd.append('seed', String(random_seed()));
+        if (origin && origin.source) fd.append('source', origin.source);
+        if (origin && origin.sourceUrl) fd.append('sourceUrl', origin.sourceUrl);
 
         try {
             set_stage('上传音频', 90, '一次短请求，音频保存在这台服务器上。');
@@ -522,11 +805,72 @@
         }
     }
 
+    async function generate_from_file() {
+        const file = selected_file;
+        if (!file) return;
+        if (static_demo) {
+            show_error('GitHub Pages 是静态演示，上传与分享链接需要本地运行 Node 服务。');
+            return;
+        }
+        set_busy(true);
+        clear_error();
+        result.classList.add('hidden');
+        await analyze_and_upload(file, file.name.replace(/\.[^.]+$/, '') || '未命名轨道');
+    }
+
+    async function generate_from_source() {
+        const track = selected_source;
+        if (!track) return;
+        if (static_demo) {
+            show_error('网络曲库需要本地运行完整服务；GitHub Pages 静态演示只能使用内置曲目。');
+            return;
+        }
+        set_busy(true);
+        clear_error();
+        result.classList.add('hidden');
+        set_stage('下载音频', 3, `正在从网络曲库获取「${track.title}」。`);
+        let file;
+        try {
+            const resp = await fetch(track.audio, {cache: 'no-store'});
+            if (!resp.ok) {
+                let message = '下载失败';
+                try {
+                    const data = await resp.json();
+                    if (data && data.error) message = data.error;
+                } catch (err) { /* 非 JSON 响应 */ }
+                throw new Error(message);
+            }
+            const blob = await resp.blob();
+            if (!blob.size || blob.size < 1024) throw new Error('音频内容为空');
+            file = new File([blob], safe_filename(track.title) + '.mp3', {
+                type: blob.type || 'audio/mpeg'
+            });
+        } catch (err) {
+            set_busy(false);
+            show_error('下载失败：' + err.message + '。可以重新搜索后再试。');
+            return;
+        }
+        set_stage('下载音频', 8, '已获取音频，开始识别音符。');
+        await analyze_and_upload(file, track.title, {
+            source: `${source_provider.name} · ${track.artist} · ${track.license || source_provider.license}`,
+            sourceUrl: track.sourceUrl || source_provider.homepage
+        });
+    }
+
+    function safe_filename(value) {
+        return String(value || '')
+            .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 60) || 'track';
+    }
+
     function generate_from_builtin() {
         const track = selected_builtin;
         if (!track) return;
         const url = new URL(`watch.html?id=${encodeURIComponent(track.id)}`, document.baseURI);
         url.searchParams.set('walls', walls_on ? '1' : '0');
+        url.searchParams.set('seed', random_seed().toString(36));
         show_result(url.href, track.title, null, true);
         toast('内置曲目的链接已生成。');
     }
@@ -534,12 +878,14 @@
     function on_generate() {
         if (busy) return;
         clear_error();
-        if (selected_builtin) {
+        if (selected_source) {
+            generate_from_source();
+        } else if (selected_builtin) {
             generate_from_builtin();
         } else if (selected_file) {
             generate_from_file();
         } else {
-            show_error('请先选择音频文件，或点一首内置曲目。');
+            show_error('请先上传音频，或从网络曲库 / 内置曲目选一首。');
         }
     }
 
@@ -552,25 +898,32 @@
             set_preview_state(preview_button, false);
             preview_button = null;
         }
-        clear_selected_file();
-        selected_builtin = null;
-        set_selected_card(null);
+        clear_selection();
+        source_results = [];
+        source_query = '';
+        source_page = 0;
+        if (song_list) song_list.innerHTML = '';
+        if (song_query) song_query.value = '';
+        if (song_more) song_more.classList.add('hidden');
+        if (online_copy) online_copy.textContent = ONLINE_COPY_IDLE;
+        source_provider = {...SOURCE_PROVIDER};
         title_input.value = '';
-        title_input.placeholder = '为这条轨道命名';
+        auto_title = '';
         set_walls(true);
+        set_mode('upload');
         result.classList.add('hidden');
         stage.classList.add('hidden');
         clear_error();
-        generate_label.textContent = '生成分享链接';
+        update_generate_label();
         window.scrollTo({top: 0, behavior: 'smooth'});
     }
 
     file_input.addEventListener('change', () => {
         if (file_input.files && file_input.files[0]) set_file(file_input.files[0]);
     });
-    clear_file.addEventListener('click', (e) => {
-        e.preventDefault();
-        if (!busy) file_input.click();
+    selection_clear.addEventListener('click', () => {
+        if (busy) return;
+        clear_selection();
     });
     dropzone.addEventListener('dragover', (e) => {
         e.preventDefault();
@@ -599,28 +952,52 @@
         }
     });
     start_over.addEventListener('click', reset_all);
+    if (source_tabs) {
+        source_tabs.addEventListener('click', (e) => {
+            const button = e.target.closest('.source-tab');
+            if (!button || button.disabled || busy) return;
+            set_mode(button.dataset.mode || 'upload');
+        });
+    }
+    if (browse_online) browse_online.addEventListener('click', () => {
+        if (!busy) set_mode('online');
+    });
+    if (browse_builtin) browse_builtin.addEventListener('click', () => {
+        if (!busy) set_mode('builtin');
+    });
+    if (song_form) {
+        song_form.addEventListener('submit', (e) => {
+            e.preventDefault();
+            if (!busy) search_source(true);
+        });
+    }
+    if (song_more) {
+        song_more.addEventListener('click', () => {
+            if (!busy) search_source(false);
+        });
+    }
 
     function mark_static_demo() {
         static_demo = true;
-        drop_sub.textContent = '静态演示只支持内置曲目 · 上传需本地运行';
-        const copy = document.querySelector('.builtin-copy');
-        if (copy) {
-            copy.textContent = 'GitHub Pages 静态演示。三首公版作品可直接播放与导出；上传与 10 分钟链接需本地运行 Node 服务。';
-        }
+        apply_static_ui();
     }
 
     async function load_builtins() {
         let api_status = 0;
         if (!STATIC_MODE) {
+            let resp = null;
             try {
-                const resp = await fetch('/api/builtins', {cache: 'no-store'});
+                resp = await fetch('/api/builtins', {cache: 'no-store'});
                 api_status = resp.status;
                 if (!resp.ok) throw new Error('API 不可用');
                 const data = await resp.json();
+                if (!data || !Array.isArray(data.tracks)) throw new Error('API 数据无效');
                 render_builtins(data.tracks || []);
                 return;
             } catch (err) {
-                // 静态托管没有后端，继续读同目录下的清单。
+                // 网络失败记为 0，静态托管返回 HTML 时记为 -1；二者都按静态演示处理。
+                if (!resp) api_status = 0;
+                else if (resp.ok) api_status = -1;
             }
         }
 
@@ -628,13 +1005,15 @@
             const resp = await fetch(new URL('builtins/manifest.json', document.baseURI).href, {cache: 'no-store'});
             if (!resp.ok) throw new Error('静态清单不可用');
             const data = await resp.json();
-            if (STATIC_MODE || api_status === 404 || api_status === 0) mark_static_demo();
+            if (STATIC_MODE || api_status === 404 || api_status === 0 || api_status === -1) mark_static_demo();
             render_builtins(data.tracks || []);
         } catch (err) {
+            if (builtin_copy) builtin_copy.textContent = '内置曲目暂不可用。';
             builtin_list.innerHTML = '<p class="builtin-copy">内置曲目暂不可用。</p>';
         }
     }
 
     set_walls(true);
+    set_mode('upload');
     load_builtins();
 })();

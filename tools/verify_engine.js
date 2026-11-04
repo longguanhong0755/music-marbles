@@ -98,13 +98,20 @@ function rectOverlap(a, b) {
 }
 
 let failed = 0;
+const SEEDS = [0, 1, 2, 3, 42, 1337, 0xDEADBEEF];
 
-for (let song = 0; song < MUSIC.length; song++) {
-    const times = buildTrack(MUSIC[song]);
+function layout_hash(bars) {
+    return bars.map((p) => [
+        p.a[0].toFixed(3), p.a[1].toFixed(3),
+        p.b[0].toFixed(3), p.b[1].toFixed(3)
+    ].join(',')).join(';');
+}
 
+function check_song(label, times, seed) {
+    API.set_intro_enabled(false);
     API.reset_tracks();
     for (const t of times) API.add_time_of_hit(0, t);
-    API.init_generator();
+    API.init_generator(seed);
 
     const bounds = API.get_bounds();
     const field = bounds.field;
@@ -198,7 +205,7 @@ for (let song = 0; song < MUSIC.length; song++) {
     if (!ok) failed++;
 
     console.log(
-        `${ok ? 'PASS' : 'FAIL'}  [${song}] ${MUSIC[song].header.name.padEnd(32)} ` +
+        `${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(36)} seed=${String(seed).padStart(10)} ` +
         `notes=${String(times.length).padStart(3)} bars=${String(B).padStart(3)} ` +
         `hits=${String(correct).padStart(3)} missed=${missed} wrong=${wrong} ` +
         `early=${early} late=${late} maxErr=${maxErr.toFixed(1)}ms V=${generated.vertical} H=${generated.horizontal} ` +
@@ -206,42 +213,82 @@ for (let song = 0; song < MUSIC.length; song++) {
         `overlaps=${overlaps} clip=${clipping} minClear=${minClear.toFixed(1)} ` +
         `outField=${outOfField + outOfFieldBall} field=${Math.round(field.max_x - field.min_x)}x${Math.round(field.max_y - field.min_y)}`
     );
+    return {ok, hash: layout_hash(bars)};
+}
+
+for (let song = 0; song < MUSIC.length; song++) {
+    const label = MUSIC[song].header.name;
+    const times = buildTrack(MUSIC[song]);
+    const hashes = [];
+    for (const seed of SEEDS) {
+        const first = check_song(label, times, seed);
+        const again = check_song(label, times, seed);
+        if (first.hash !== again.hash) {
+            failed++;
+            console.log(`FAIL  [${label}] seed=${seed} layout is not deterministic`);
+        }
+        hashes.push(first.hash);
+    }
+    const unique = new Set(hashes).size;
+    const diversity_ok = unique >= Math.ceil(SEEDS.length * 0.9);
+    if (!diversity_ok) failed++;
+    console.log(
+        `${diversity_ok ? 'PASS' : 'FAIL'}  [${label}] ${label.padEnd(32)} ` +
+        `seed diversity ${unique}/${SEEDS.length} distinct layouts`
+    );
+}
+
+// The shipped built-in library includes MIDI vendored from open-source
+// projects, so verify the exact notes.json files the browser loads as well.
+{
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'builtins/manifest.json'), 'utf8'));
+    for (const item of manifest.tracks || []) {
+        const rel = String(item.notes || '').replace(/^\/builtins\//, '');
+        const payload = JSON.parse(fs.readFileSync(path.join(root, 'builtins', rel), 'utf8'));
+        const times = (payload.notes || []).map((n) => Math.round(n.time * 1000));
+        for (const seed of [0, 42]) check_song(item.title, times, seed);
+    }
 }
 
 // --- 1 s acceleration intro ------------------------------------------------
 {
     const intro_times = buildTrack(MUSIC[0]).slice(0, 24);
-    API.set_intro_enabled(true);
-    API.reset_tracks();
-    for (const t of intro_times) API.add_time_of_hit(0, t);
-    API.init_generator();
-    const info = API.get_intro();
-    API.begin_song();
-    const start_x = API.get_marble_x(0);
-    const start_y = API.get_marble_y(0);
-    let first = null;
-    let last = -1;
-    for (let i = 0; i < 200; i++) {
-        API.update_main_world();
-        const hit = API.get_marble_collision(0);
-        if (hit !== -1 && hit !== last) {
-            if (!first) first = {bar: hit, time: API.get_last_hit_time()};
-            last = hit;
+    for (const seed of [0, 1, 2, 3]) {
+        API.set_intro_enabled(true);
+        API.reset_tracks();
+        for (const t of intro_times) API.add_time_of_hit(0, t);
+        API.init_generator(seed);
+        const info = API.get_intro();
+        API.begin_song();
+        const start_x = API.get_marble_x(0);
+        const start_y = API.get_marble_y(0);
+        let first = null;
+        let last = -1;
+        for (let i = 0; i < 200; i++) {
+            API.update_main_world();
+            const hit = API.get_marble_collision(0);
+            if (hit !== -1 && hit !== last) {
+                if (!first) first = {bar: hit, time: API.get_last_hit_time()};
+                last = hit;
+            }
+            if (first && API.get_time() > intro_times[0] + 100) break;
         }
-        if (first && API.get_time() > intro_times[0] + 100) break;
+        const dx = (seed & 1) ? -1 : 1;
+        const dy = (seed & 2) ? -1 : 1;
+        const expect = 200 / Math.SQRT2;
+        const intro_ok = info.enabled === true &&
+            Math.abs(info.distance - 200) < 1e-9 &&
+            info.dir_x === dx && info.dir_y === dy &&
+            Math.abs(start_x - dx * expect) < 1e-6 &&
+            Math.abs(start_y - dy * expect) < 1e-6 &&
+            first && first.bar === 0 && Math.abs(first.time - intro_times[0]) <= TICK;
+        if (!intro_ok) failed++;
+        console.log(
+            `${intro_ok ? 'PASS' : 'FAIL'}  intro seed=${seed} dir=${dx},${dy} distance=${info.distance} ` +
+            `start=${start_x.toFixed(2)},${start_y.toFixed(2)} ` +
+            `firstHit=${first ? first.time : 'none'}ms expected=${intro_times[0]}ms`
+        );
     }
-    const expect = 200 / Math.SQRT2;
-    const intro_ok = info.enabled === true &&
-        Math.abs(info.distance - 200) < 1e-9 &&
-        Math.abs(start_x - expect) < 1e-6 &&
-        Math.abs(start_y - expect) < 1e-6 &&
-        first && first.bar === 0 && Math.abs(first.time - intro_times[0]) <= TICK;
-    if (!intro_ok) failed++;
-    console.log(
-        `${intro_ok ? 'PASS' : 'FAIL'}  intro  distance=${info.distance} ` +
-        `start=${start_x.toFixed(2)},${start_y.toFixed(2)} ` +
-        `firstHit=${first ? first.time : 'none'}ms expected=${intro_times[0]}ms`
-    );
     API.set_intro_enabled(false);
     API.reset_playback();
 }

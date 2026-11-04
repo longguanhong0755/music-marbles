@@ -9,15 +9,21 @@
 
     const PAD_THICKNESS = 8;
     const MARBLE_IMAGE_SIZE = 44;
-    const PARTICLE_IMAGE_SIZE = 16;
     const TRACE_SIZE = 110;
+    const BACKGROUND_DARK = 'dark';
+    const BACKGROUND_LIGHT = 'light';
+
+    function normalize_background(value) {
+        const key = String(value == null ? '' : value).trim().toLowerCase();
+        return key === BACKGROUND_LIGHT || key === 'white'
+            ? BACKGROUND_LIGHT
+            : BACKGROUND_DARK;
+    }
 
     const images = {
-        marble: new Image(),
-        particle: new Image()
+        marble: new Image()
     };
     images.marble.src = new URL('images/marble.png', document.baseURI).href;
-    images.particle.src = new URL('images/particle.png', document.baseURI).href;
 
     function load_images() {
         const wait = (img) => new Promise((resolve) => {
@@ -25,7 +31,7 @@
             img.addEventListener('load', resolve, {once: true});
             img.addEventListener('error', resolve, {once: true});
         });
-        return Promise.all([wait(images.marble), wait(images.particle)]).then(() => images);
+        return Promise.all([wait(images.marble)]).then(() => images);
     }
 
     function note_hue(names) {
@@ -64,6 +70,13 @@
         };
     }
 
+    function make_canvas(width, height) {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(width));
+        canvas.height = Math.max(1, Math.round(height));
+        return canvas;
+    }
+
     class View {
         constructor(canvas, width, height, dpr) {
             this.canvas = canvas;
@@ -79,6 +92,7 @@
             this.offset = [width * 0.5, height * 0.42];
             this.stars = [];
             this.seed = 1;
+            this.plank_cache = null;
         }
 
         set_scale(scale) {
@@ -173,9 +187,21 @@
         ctx.restore();
     }
 
-    function draw_background(view, wall_field) {
+    function draw_background(view, wall_field, background) {
         const ctx = view.ctx;
-        const w = view.width, h = view.height;
+        const w = view.width;
+        const h = view.height;
+        const theme = normalize_background(background);
+
+        // The light theme is intentionally a flat pure-white field: no stars,
+        // no vignette, no gradient. Walls still use the same black room mask.
+        if (theme === BACKGROUND_LIGHT) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, w, h);
+            if (wall_field) wall_field.draw(view);
+            return;
+        }
+
         const g = ctx.createRadialGradient(w * 0.5, h * 0.38, 0, w * 0.5, h * 0.38, Math.max(w, h) * 0.72);
         g.addColorStop(0, '#101a30');
         g.addColorStop(0.52, '#080d18');
@@ -188,12 +214,81 @@
         // still feels like one dark room.
         if (wall_field) wall_field.draw(view);
 
-        // a soft vignette keeps the edges from competing with the run
         const v = ctx.createRadialGradient(w * 0.5, h * 0.5, Math.min(w, h) * 0.25, w * 0.5, h * 0.5, Math.max(w, h) * 0.72);
         v.addColorStop(0, 'rgba(0,0,0,0)');
         v.addColorStop(1, 'rgba(0,0,0,0.38)');
         ctx.fillStyle = v;
         ctx.fillRect(0, 0, w, h);
+    }
+
+    const PLANK_VISUAL_LEN = 28;
+
+    function get_plank_sprites(view, background) {
+        const theme = normalize_background(background);
+        const key = `${Number(view.scale).toFixed(6)}:${theme}`;
+        if (view.plank_cache && view.plank_cache.key === key) return view.plank_cache;
+
+        const scale = view.scale;
+        const thick = PAD_THICKNESS * scale;
+        const len = PLANK_VISUAL_LEN * scale;
+        const radius = thick * 0.5;
+        // The glow used to force a 30 px shadow into every sprite. Sprites only
+        // need the bar itself now, so the padding stays small.
+        const pad = Math.ceil(4 * scale + 2);
+        const vw = Math.ceil(thick + pad * 2);
+        const vh = Math.ceil(len + pad * 2);
+        const hw = vh;
+        const hh = vw;
+        const base_color = theme === BACKGROUND_LIGHT ? '#e8e9ec' : '#ffffff';
+        const hit_lightness = theme === BACKGROUND_LIGHT ? 46 : 72;
+
+        function base_sprite(vertical) {
+            const w = vertical ? vw : hw;
+            const h = vertical ? vh : hh;
+            const canvas = make_canvas(w, h);
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = base_color;
+            if (vertical) round_rect(ctx, pad, pad, thick, len, radius);
+            else round_rect(ctx, pad, pad, len, thick, radius);
+            ctx.fill();
+            // On a white background the idle bar needs a dark hairline or it
+            // disappears into the room. The same bar stays visible when it is
+            // mounted on a black wall.
+            if (theme === BACKGROUND_LIGHT) {
+                ctx.lineWidth = Math.max(1, 1.2 * scale);
+                ctx.strokeStyle = '#171a21';
+                ctx.stroke();
+            }
+            return canvas;
+        }
+
+        const cache = {
+            key,
+            theme,
+            vw, vh, hw, hh,
+            base_v: base_sprite(true),
+            base_h: base_sprite(false),
+            struck: new Map(),
+            struck_for(vertical, hue) {
+                const k = `${vertical ? 'v' : 'h'}:${hue}`;
+                let canvas = this.struck.get(k);
+                if (canvas) return canvas;
+                const w = vertical ? vw : hw;
+                const h = vertical ? vh : hh;
+                canvas = make_canvas(w, h);
+                const ctx = canvas.getContext('2d');
+                // A clean, flat color fill. No white underlay, no flash, no
+                // shadow: the collision itself is the only change.
+                ctx.fillStyle = `hsl(${hue} 62% ${hit_lightness}%)`;
+                if (vertical) round_rect(ctx, pad, pad, thick, len, radius);
+                else round_rect(ctx, pad, pad, len, thick, radius);
+                ctx.fill();
+                this.struck.set(k, canvas);
+                return canvas;
+            }
+        };
+        view.plank_cache = cache;
+        return cache;
     }
 
     class Plank {
@@ -202,7 +297,7 @@
             this.b = data.b;
             this.note = data.note;
             this.hit_time = data.hit;
-            this.visual_len = 28;
+            this.visual_len = PLANK_VISUAL_LEN;
             this.center_x = (this.a[0] + this.b[0]) * 0.5;
             this.center_y = (this.a[1] + this.b[1]) * 0.5;
             this.vertical = data.vertical !== undefined
@@ -211,54 +306,37 @@
 
             const entry = track[this.note];
             this.hue = note_hue(entry && entry.note_names);
-            this.color = `hsl(${this.hue} 64% 77%)`;
-            this.glow = `hsl(${this.hue} 82% 80%)`;
+            this.color = `hsl(${this.hue} 62% 72%)`;
         }
 
         flash(note_index, at, track) {
             const entry = track[note_index];
             this.hit_time = at;
             this.hue = note_hue(entry && entry.note_names);
-            this.color = `hsl(${this.hue} 64% 77%)`;
-            this.glow = `hsl(${this.hue} 82% 80%)`;
+            this.color = `hsl(${this.hue} 62% 72%)`;
         }
 
-        draw(view, now) {
+        draw(view, now, background) {
             const ctx = view.ctx;
             const [sx, sy] = view.screen(this.center_x, this.center_y);
             const pad = 90 * view.scale;
             if (sx < -pad || sx > view.width + pad || sy < -pad || sy > view.height + pad) return;
 
             const struck = Number.isFinite(this.hit_time);
-            const age = struck ? now - this.hit_time : Infinity;
-            const flash = struck && age >= 0 && age < 180 ? 1 - age / 180 : 0;
+            const sprites = get_plank_sprites(view, background);
+            const w = this.vertical ? sprites.vw : sprites.hw;
+            const h = this.vertical ? sprites.vh : sprites.hh;
+            const x = sx - w * 0.5;
+            const y = sy - h * 0.5;
 
-            const len = this.visual_len * view.scale;
-            const thick = PAD_THICKNESS * view.scale;
-            const radius = thick * 0.5;
-            const path = () => {
-                if (this.vertical) {
-                    round_rect(ctx, sx - thick / 2, sy - len / 2, thick, len, radius);
-                } else {
-                    round_rect(ctx, sx - len / 2, sy - thick / 2, len, thick, radius);
-                }
-            };
-
-            ctx.save();
-            ctx.globalAlpha = struck ? 0.88 : 0.78;
-            ctx.fillStyle = '#ffffff';
-            path();
-            ctx.fill();
-
-            if (struck) {
-                ctx.globalAlpha = Math.min(1, 0.97 + 0.22 * flash);
-                ctx.fillStyle = this.color;
-                ctx.shadowColor = this.glow;
-                ctx.shadowBlur = (10 + 20) * view.scale;
-                path();
-                ctx.fill();
+            if (!struck) {
+                ctx.globalAlpha = sprites.theme === BACKGROUND_LIGHT ? 1 : 0.78;
+                ctx.drawImage(this.vertical ? sprites.base_v : sprites.base_h, x, y, w, h);
+            } else {
+                ctx.globalAlpha = 1;
+                ctx.drawImage(sprites.struck_for(this.vertical, this.hue), x, y, w, h);
             }
-            ctx.restore();
+            ctx.globalAlpha = 1;
         }
     }
 
@@ -280,16 +358,23 @@
             this.collision = collision;
         }
 
-        draw(view) {
+        draw(view, background) {
             const ctx = view.ctx;
             const scale = view.scale;
             const n = this.trace.length;
+            const theme = normalize_background(background);
+            const light = theme === BACKGROUND_LIGHT;
 
             if (n > 1) {
                 ctx.save();
-                ctx.globalCompositeOperation = 'lighter';
-                ctx.strokeStyle = 'rgba(255,238,190,0.28)';
-                ctx.lineWidth = Math.max(0.8, 1.4 * scale);
+                if (light) {
+                    ctx.strokeStyle = 'rgba(24,27,34,0.16)';
+                    ctx.lineWidth = Math.max(0.8, 1.4 * scale);
+                } else {
+                    ctx.globalCompositeOperation = 'lighter';
+                    ctx.strokeStyle = 'rgba(255,238,190,0.28)';
+                    ctx.lineWidth = Math.max(0.8, 1.4 * scale);
+                }
                 ctx.beginPath();
                 for (let j = 0; j < n; j++) {
                     const p = view.screen(this.trace[j][0], this.trace[j][1]);
@@ -301,61 +386,34 @@
             }
 
             ctx.save();
-            ctx.globalCompositeOperation = 'lighter';
+            if (!light) ctx.globalCompositeOperation = 'lighter';
             for (let j = 0; j < n; j++) {
                 const p = view.screen(this.trace[n - j - 1][0], this.trace[n - j - 1][1]);
                 const k = 1 - j / n;
                 const radius = (0.9 + 2.6 * k * k) * scale;
-                ctx.globalAlpha = 0.06 + 0.48 * k * k;
-                ctx.fillStyle = j < 18 ? '#fffbe6' : '#ffe9a8';
+                ctx.globalAlpha = (light ? 0.05 : 0.06) + (light ? 0.20 : 0.48) * k * k;
+                ctx.fillStyle = light ? '#1d2330' : (j < 18 ? '#fffbe6' : '#ffe9a8');
                 ctx.beginPath();
                 ctx.arc(p[0], p[1], radius, 0, Math.PI * 2);
                 ctx.fill();
             }
             ctx.restore();
 
-            ctx.save();
-            ctx.shadowColor = '#fff2b0';
-            ctx.shadowBlur = 18 * scale;
             const size = MARBLE_IMAGE_SIZE * scale;
             const p = view.screen(this.position[0], this.position[1]);
-            ctx.drawImage(images.marble, p[0] - size / 2, p[1] - size / 2, size, size);
-            ctx.restore();
-        }
-    }
-
-    class Particle {
-        constructor(position, velocity, time, color) {
-            this.position = position;
-            this.velocity = velocity;
-            this.time_left = time;
-            this.time_total = time;
-            this.color = color || '#fff7c8';
-        }
-
-        update() {
-            this.time_left -= 15;
-            this.position[0] += this.velocity[0];
-            this.position[1] += this.velocity[1];
-            this.velocity[1] += 0.16;
-            this.velocity[0] *= 0.985;
-            this.velocity[1] *= 0.985;
-        }
-
-        draw(view) {
-            const ctx = view.ctx;
-            const a = Math.max(0, Math.sqrt(this.time_left / this.time_total));
-            const r = (1.5 + 3.5 * (1 - this.time_left / this.time_total)) * view.scale;
-            const p = view.screen(this.position[0], this.position[1]);
             ctx.save();
-            ctx.globalAlpha = a * 0.9;
-            ctx.globalCompositeOperation = 'lighter';
-            ctx.fillStyle = this.color;
-            ctx.shadowColor = this.color;
-            ctx.shadowBlur = 10 * view.scale;
-            ctx.beginPath();
-            ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
-            ctx.fill();
+            if (light) {
+                // The marble asset is nearly white. A dark disc behind it keeps
+                // it visible on a pure-white background.
+                ctx.fillStyle = 'rgba(18,21,28,0.92)';
+                ctx.beginPath();
+                ctx.arc(p[0], p[1], size * 0.355, 0, Math.PI * 2);
+                ctx.fill();
+            } else {
+                ctx.shadowColor = '#fff2b0';
+                ctx.shadowBlur = 18 * scale;
+            }
+            ctx.drawImage(images.marble, p[0] - size / 2, p[1] - size / 2, size, size);
             ctx.restore();
         }
     }
@@ -364,11 +422,10 @@
         constructor(track, view, seed, options) {
             this.track = track;
             this.view = view;
-            this.rand = mulberry32(seed || 1);
             this.planks = API.get_planks().map((p) => new Plank(p, track));
             this.marble = new Marble([API.get_marble_x(0), API.get_marble_y(0)]);
-            this.particles = [];
             this.time = 0;
+            this.background = normalize_background(options && options.background);
             this.wall_field = null;
             this.walls_enabled = !options || options.walls !== false;
             this.wall_options = options && options.wall_options ? options.wall_options : null;
@@ -400,7 +457,6 @@
             API.reset_playback();
             this.planks = API.get_planks().map((p) => new Plank(p, this.track));
             this.marble = new Marble([API.get_marble_x(0), API.get_marble_y(0)]);
-            this.particles = [];
             this.time = 0;
             init_stars(this.view, this.view.seed || 1);
             this.reset_camera();
@@ -408,8 +464,10 @@
 
         set_intro_progress(t, intro) {
             const s = Math.min(intro.distance, 0.5 * intro.accel * t * t);
-            const x = s / Math.SQRT2;
-            const y = s / Math.SQRT2;
+            const dx = Number.isFinite(intro.dir_x) ? intro.dir_x : 1;
+            const dy = Number.isFinite(intro.dir_y) ? intro.dir_y : 1;
+            const x = dx * s / Math.SQRT2;
+            const y = dy * s / Math.SQRT2;
             this.marble.synchronize([x, y], -1);
             this.time = t * 1000;
             update_camera(this.view, this.marble.position);
@@ -427,36 +485,31 @@
             if (index === undefined || index < 0) return false;
             const plank = this.planks[index];
             if (!plank) return false;
+            // The hit only recolors the bar. No flash, glow, ring or burst.
             plank.flash(index, API.get_last_hit_time(), this.track);
-            this.spawn_particles(plank.center_x, plank.center_y, plank.color);
             return true;
-        }
-
-        spawn_particles(x, y, color) {
-            for (let j = 0; j < 8; j++) {
-                const angle = this.rand() * Math.PI * 2;
-                const speed = this.rand() * 3 + 0.6;
-                const life = 240 + this.rand() * 380;
-                this.particles.push(new Particle(
-                    [x + (this.rand() - 0.5) * 6, y + (this.rand() - 0.5) * 6],
-                    [Math.cos(angle) * speed, Math.sin(angle) * speed - 0.8],
-                    life,
-                    color
-                ));
-            }
-        }
-
-        update_particles() {
-            this.particles.forEach((p) => p.update());
-            this.particles = this.particles.filter((p) => p.time_left > 0);
         }
 
         draw() {
             const view = this.view;
-            draw_background(view, this.wall_field);
-            for (let i = 0; i < this.planks.length; i++) this.planks[i].draw(view, this.time);
-            this.marble.draw(view);
-            for (let i = 0; i < this.particles.length; i++) this.particles[i].draw(view);
+            const timings = this.draw_timings || (this.draw_timings = {
+                background_ms: 0,
+                planks_ms: 0,
+                marble_ms: 0
+            });
+            let t0 = performance.now();
+            draw_background(view, this.wall_field, this.background);
+            timings.background_ms += performance.now() - t0;
+
+            t0 = performance.now();
+            for (let i = 0; i < this.planks.length; i++) {
+                this.planks[i].draw(view, this.time, this.background);
+            }
+            timings.planks_ms += performance.now() - t0;
+
+            t0 = performance.now();
+            this.marble.draw(view, this.background);
+            timings.marble_ms += performance.now() - t0;
         }
     }
 
@@ -488,12 +541,12 @@
     global.SceneKit = {
         PAD_THICKNESS,
         MARBLE_IMAGE_SIZE,
-        PARTICLE_IMAGE_SIZE,
+        BACKGROUND_DARK,
+        BACKGROUND_LIGHT,
         View,
         Scene,
         Plank,
         Marble,
-        Particle,
         load_images,
         note_hue,
         fit_scale,
@@ -502,6 +555,7 @@
         init_stars,
         draw_background,
         update_camera,
+        normalize_background,
         mulberry32
     };
 })(window);

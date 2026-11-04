@@ -4,6 +4,8 @@
  *   GET  /                         landing page
  *   GET  /watch/:id                player page
  *   GET  /api/builtins             bundled demo tracks
+ *   GET  /api/source/search?q=     search the Incompetech instrumental catalog
+ *   GET  /api/source/audio?token=  stream a selected external track
  *   GET  /api/tracks/:id           track metadata + notes
  *   POST /api/tracks               audio + notes -> share id
  *   GET  /media/:id/audio          transcoded audio
@@ -42,6 +44,9 @@ const ID_RE = /^[A-Za-z0-9_-]{6,40}$/;
 const BUILTIN_RE = /^builtin-[a-z0-9-]+$/;
 const RATIOS = new Set(['9x16', '16x9', '1x1', '4x5']);
 
+const {create_source_service} = require('./sources');
+const sourceService = create_source_service();
+
 const audioUpload = multer({
     dest: TMP,
     limits: {fileSize: 80 * 1024 * 1024, files: 1},
@@ -69,6 +74,16 @@ function make_id() {
 
 function safe_id(id) {
     return ID_RE.test(id);
+}
+
+function parse_seed(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.floor(n) >>> 0;
+}
+
+function random_seed() {
+    return crypto.randomBytes(4).readUInt32BE(0) >>> 0 || 1;
 }
 
 function public_base(req) {
@@ -232,18 +247,31 @@ async function transcode_video(input, output) {
 let cached_encoder = '';
 async function pick_h264_encoder() {
     if (cached_encoder) return cached_encoder;
+    let listed = [];
     try {
         const {out} = await run('ffmpeg', ['-hide_banner', '-encoders']);
-        for (const name of ['h264_videotoolbox', 'h264_nvenc', 'h264_qsv', 'libx264']) {
-            if (new RegExp(`\\b${name}\\b`).test(out)) {
-                cached_encoder = name;
-                break;
-            }
-        }
+        listed = ['h264_videotoolbox', 'h264_nvenc', 'h264_qsv']
+            .filter((name) => new RegExp(`\\b${name}\\b`).test(out));
     } catch (err) {
         // Fall through to libx264; the transcode itself will report the real error.
     }
-    if (!cached_encoder) cached_encoder = 'libx264';
+    // The encoder list can contain hardware encoders that exist in the build
+    // but cannot run in this container/VM. Probe each with a 64x64 frame so a
+    // full transcode never fails only at the end.
+    for (const name of listed) {
+        try {
+            await run('ffmpeg', [
+                '-y', '-hide_banner', '-loglevel', 'error',
+                '-f', 'lavfi', '-i', 'color=c=black:s=64x64:d=0.1',
+                '-frames:v', '1', '-c:v', name, '-f', 'null', '-'
+            ]);
+            cached_encoder = name;
+            return cached_encoder;
+        } catch (err) {
+            console.warn(`硬件编码器 ${name} 不可用，继续探测：`, err.message.slice(-200));
+        }
+    }
+    cached_encoder = 'libx264';
     return cached_encoder;
 }
 
@@ -322,10 +350,20 @@ async function remux_video(input, output) {
     ]);
 }
 
-async function process_video(input, output, {offline, audio, ext}) {
+async function process_video(input, output, {offline, muxed, audio, ext}) {
     if (offline) {
         await mux_offline_video(input, audio, output);
         return;
+    }
+    if (muxed) {
+        // The browser already muxed H.264 + AAC. A stream copy plus
+        // faststart is all that is needed; skip ffprobe on the happy path.
+        try {
+            await remux_video(input, output);
+            return;
+        } catch (err) {
+            console.warn('已封装 MP4 直接复制失败，改走探测/转码：', err.message);
+        }
     }
     const codecs = await media_codecs(input);
     if (!codecs.video) {
@@ -369,7 +407,83 @@ function sanitize_notes(raw) {
     }).sort((a, b) => a.time - b.time);
 }
 
+function clean_source_text(value, max) {
+    return String(value == null ? '' : value)
+        .replace(/[\u0000-\u001f\u007f]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, max);
+}
+
 app.get('/api/health', (req, res) => res.json({ok: true}));
+
+app.get('/api/source/search', async (req, res) => {
+    const query = clean_source_text(req.query.q, 80);
+    const page = Math.max(1, Math.min(1000, Math.floor(Number(req.query.page) || 1)));
+    try {
+        const result = await sourceService.search({query, page});
+        res.json(result);
+    } catch (err) {
+        console.warn('[source] search failed:', err.message);
+        res.status(502).json({error: '纯音乐曲库暂时不可用，请稍后再试。'});
+    }
+});
+
+app.get('/api/source/audio', async (req, res) => {
+    const payload = sourceService.readToken(req.query.token, 'audio');
+    if (!payload) return res.status(410).json({error: '曲目链接已失效，请重新搜索。'});
+    let upstream;
+    try {
+        upstream = await sourceService.fetchAudio(payload, req.headers.range);
+    } catch (err) {
+        console.warn('[source] audio failed:', err.message);
+        return res.status(502).json({error: '纯音乐曲库下载超时，请重试。'});
+    }
+    if (upstream.status !== 200 && upstream.status !== 206) {
+        upstream.stream.resume();
+        return res.status(404).json({error: '这首曲子暂时无法下载。'});
+    }
+    const type = String(upstream.headers['content-type'] || '').toLowerCase();
+    if (type && !/audio\/|application\/octet-stream|binary\/octet-stream/.test(type)) {
+        upstream.stream.resume();
+        return res.status(404).json({error: '这首曲子暂时无法下载。'});
+    }
+    const maxAudioBytes = sourceService.maxAudioBytes;
+    const total = Number(upstream.headers['content-length'] || 0);
+    if (Number.isFinite(total) && total > maxAudioBytes) {
+        upstream.stream.resume();
+        return res.status(413).json({error: '音频超过 80 MB。'});
+    }
+    res.status(upstream.status);
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Cache-Control', 'no-store');
+    const ranges = upstream.headers['accept-ranges'];
+    if (ranges) res.setHeader('Accept-Ranges', ranges);
+    const contentRange = upstream.headers['content-range'];
+    if (contentRange) res.setHeader('Content-Range', contentRange);
+    if (total) res.setHeader('Content-Length', String(total));
+    let sent = 0;
+    let finished = false;
+    res.on('close', () => {
+        if (!finished) upstream.stream.destroy();
+    });
+    upstream.stream.on('data', (chunk) => {
+        sent += chunk.length;
+        if (sent > maxAudioBytes) {
+            finished = true;
+            upstream.stream.destroy();
+            res.destroy();
+        }
+    });
+    upstream.stream.on('error', () => {
+        if (!res.headersSent) res.status(502).json({error: '下载中断，请重试。'});
+        else res.destroy();
+    });
+    upstream.stream.on('end', () => {
+        finished = true;
+    });
+    upstream.stream.pipe(res);
+});
 
 app.get('/api/builtins', async (req, res) => {
     try {
@@ -395,6 +509,10 @@ app.get('/api/tracks/:id', async (req, res) => {
                 duration: item.duration,
                 audioUrl: item.audio,
                 notes: data.notes,
+                source: item.source || '',
+                sourceUrl: item.sourceUrl || '',
+                license: item.license || '',
+                seed: 0,
                 builtin: true,
                 permanent: true,
                 expiresAt: null
@@ -418,6 +536,9 @@ app.get('/api/tracks/:id', async (req, res) => {
                 : {walls: true},
             audioUrl: `/media/${id}/audio`,
             notes: JSON.parse(notes),
+            seed: parse_seed(meta.seed),
+            source: meta.source || '',
+            sourceUrl: meta.sourceUrl || '',
             builtin: false,
             permanent: false,
             expiresAt: at,
@@ -444,6 +565,15 @@ app.post('/api/tracks', audioUpload.single('audio'), async (req, res, next) => {
         const audioOffset = Math.max(0, Math.min(36000, Number(req.body.audioOffset) || 0));
         const padStart = Math.max(0, Math.min(1, Number(req.body.padStart) || 0));
         const walls = String(req.body.walls || '1') !== '0';
+        const seed = req.body.seed !== undefined && req.body.seed !== ''
+            ? parse_seed(req.body.seed)
+            : random_seed();
+        const source = clean_source_text(req.body.source, 120);
+        let sourceUrl = '';
+        try {
+            const url = new URL(String(req.body.sourceUrl || ''));
+            if (url.protocol === 'http:' || url.protocol === 'https:') sourceUrl = url.href.slice(0, 300);
+        } catch (err) { /* 没有来源地址 */ }
         const settings = {walls};
 
         const id = make_id();
@@ -463,6 +593,9 @@ app.post('/api/tracks', audioUpload.single('audio'), async (req, res, next) => {
             audioOffset,
             padStart,
             settings,
+            seed,
+            source,
+            sourceUrl,
             notes: notes.length,
             originalName: req.file.originalname || '',
             createdAt: new Date(now).toISOString(),
@@ -473,11 +606,15 @@ app.post('/api/tracks', audioUpload.single('audio'), async (req, res, next) => {
         const watch_url = new URL(`${base}/watch.html`);
         watch_url.searchParams.set('id', id);
         watch_url.searchParams.set('walls', walls ? '1' : '0');
+        if (seed) watch_url.searchParams.set('seed', seed.toString(36));
         res.json({
             id,
             title,
             duration,
             settings,
+            seed,
+            source,
+            sourceUrl,
             watchUrl: watch_url.href,
             audioUrl: `/media/${id}/audio`,
             expiresAt: now + CONTENT_TTL_MS,
@@ -527,6 +664,7 @@ app.post('/api/tracks/:id/video', videoUpload.single('video'), async (req, res, 
     const temp = req.file.path;
     const ext = path.extname(req.file.originalname || '').toLowerCase();
     const offline = String(req.body.offline || '') === '1';
+    const muxed = String(req.body.muxed || '') === '1';
     try {
         if (!(await track_available(id))) return res.status(404).json({error: '已过期'});
         const dir = path.join(TRACKS, id);
@@ -534,7 +672,7 @@ app.post('/api/tracks/:id/video', videoUpload.single('video'), async (req, res, 
         const audio = offline ? await resolve_track_audio(id) : null;
         if (offline && !audio) return res.status(409).json({error: '原曲已过期，无法封装音频'});
         const output = path.join(dir, `video-${ratio}.mp4`);
-        await process_video(temp, output, {offline, audio, ext});
+        await process_video(temp, output, {offline, muxed, audio, ext});
         res.json({
             url: `/media/${id}/video-${ratio}.mp4`,
             download: `${clean_name(meta.title)}-${ratio}.mp4`,
@@ -566,6 +704,7 @@ app.post('/api/video', videoUpload.single('video'), async (req, res, next) => {
     const temp = req.file.path;
     const ext = path.extname(req.file.originalname || '').toLowerCase();
     const offline = String(req.body.offline || '') === '1';
+    const muxed = String(req.body.muxed || '') === '1';
     const track_id = String(req.body.trackId || '');
     try {
         let audio = null;
@@ -581,7 +720,7 @@ app.post('/api/video', videoUpload.single('video'), async (req, res, next) => {
         const dir = path.join(EXPORTS, id);
         await fsp.mkdir(dir, {recursive: true});
         const output = path.join(dir, `video-${ratio}.mp4`);
-        await process_video(temp, output, {offline, audio, ext});
+        await process_video(temp, output, {offline, muxed, audio, ext});
         const now = Date.now();
         await write_meta(dir, {
             id,
@@ -621,6 +760,22 @@ app.use('/images', express.static(path.join(ROOT, 'images'), {maxAge: '1d'}));
 app.use('/vendor', express.static(path.join(ROOT, 'vendor'), {maxAge: '1d'}));
 app.use('/builtins', express.static(BUILTINS, {maxAge: '1h'}));
 
+const ROOT_ASSETS = new Set([
+    'favicon.svg',
+    'favicon-32.png',
+    'apple-touch-icon.png',
+    'icon-192.png',
+    'icon-512.png',
+    'site.webmanifest'
+]);
+app.get('/:asset', (req, res, next) => {
+    const name = req.params.asset;
+    if (!ROOT_ASSETS.has(name)) return next();
+    res.sendFile(path.join(ROOT, name), {maxAge: '1d'}, (err) => {
+        if (err && !res.headersSent) next();
+    });
+});
+
 app.get('/', (req, res) => res.sendFile(path.join(ROOT, 'index.html')));
 app.get('/watch.html', (req, res) => res.sendFile(path.join(ROOT, 'watch.html')));
 app.get('/watch/:id', (req, res) => {
@@ -652,3 +807,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 });
 server.requestTimeout = 0;
 server.timeout = 0;
+
+// Warm the catalog so the first search in the UI is not stuck on the 800 KB
+// upstream JSON. Failure is harmless: the search endpoint retries on demand.
+sourceService.warmup().catch((err) => console.warn('[source] 曲库预加载失败：', err.message));

@@ -5,9 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音乐弹珠</title>
     <meta name="description" content="音频生成的弹珠轨道。链接保留 10 分钟，可手动延长。">
-    <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="styles/reset.css?v=20261031c">
-    <link rel="stylesheet" href="styles/watch.css?v=20261031c">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <link rel="manifest" href="site.webmanifest">
+    <meta name="theme-color" content="#0B101B">
+    <link rel="stylesheet" href="styles/reset.css?v=20261103a">
+    <link rel="stylesheet" href="styles/watch.css?v=20261103b">
     <script>window.MUSIC_MARBLES_STATIC = window.MUSIC_MARBLES_STATIC || /(^|\.)github\.io$/i.test(location.hostname) || location.protocol === 'file:';</script>
 </head>
 <body>
@@ -21,6 +25,10 @@
         <symbol id="i-restart" viewBox="0 0 24 24">
             <path d="M19.6 11.6a7.8 7.8 0 1 1-2.13-5.37" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
             <path d="M19.8 4.6v5.2h-5.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        </symbol>
+        <symbol id="i-shuffle" viewBox="0 0 24 24">
+            <path d="M4.2 7.4h2.9c1.35 0 2.42.68 3.34 1.86l3.02 4.08c.92 1.18 1.99 1.86 3.34 1.86h2.9M4.2 16.6h2.9c1.35 0 2.42-.68 3.34-1.86l1.1-1.48M14.8 9.02l1.06-1.44c.92-1.18 1.99-1.86 3.34-1.86h2.9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="m17.9 3.6 3.1 2.12-3.1 2.12M17.9 13.98l3.1 2.12-3.1 2.12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
         </symbol>
         <symbol id="i-volume" viewBox="0 0 24 24">
             <path d="M4.2 9.3h3.5L12.3 6v12l-4.6-3.3H4.2V9.3Z" fill="currentColor"/>
@@ -51,6 +59,7 @@
             <div class="track-block">
                 <span class="track-kicker" id="track-status">观看轨道</span>
                 <div class="track-title" id="track-title">正在加载…</div>
+                <a class="track-source hidden" id="track-source" target="_blank" rel="noopener noreferrer">查看来源</a>
             </div>
             <div class="top-actions">
                 <button class="icon-button" id="share-button" type="button" title="复制链接">分享</button>
@@ -91,6 +100,9 @@
             <button class="control" id="restart-button" type="button" title="重新开始">
                 <svg class="icon restart-icon" aria-hidden="true"><use href="#i-restart"></use></svg>
             </button>
+            <button class="control" id="reroll-button" type="button" title="换一条路">
+                <svg class="icon reroll-icon" aria-hidden="true"><use href="#i-shuffle"></use></svg>
+            </button>
             <div class="time" id="time-label">0:00 / 0:00</div>
             <div class="progress" id="progress-track">
                 <div class="progress-fill" id="progress-fill"></div>
@@ -108,6 +120,11 @@
                 <span class="meta-label" id="expiry-label">链接剩余</span>
                 <span class="expiry-value" id="expiry-value">--:--</span>
                 <button class="link-button" id="extend-button" type="button">延长 10 分钟</button>
+            </div>
+            <div class="theme-switch" role="group" aria-label="画面背景">
+                <span class="meta-label">背景</span>
+                <button class="theme-option" type="button" data-bg="dark" aria-pressed="true">黑底</button>
+                <button class="theme-option" type="button" data-bg="light" aria-pressed="false">白底</button>
             </div>
             <button class="download-button" id="download-button" type="button">
                 <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
@@ -156,6 +173,14 @@
                     <small>1080 × 1350 · 竖版信息流</small>
                 </button>
             </div>
+            <label class="fast-toggle" for="fast-export">
+                <input type="checkbox" id="fast-export">
+                <span class="fast-copy">
+                    <strong>快速导出（720p）</strong>
+                    <small>编码更快、文件约小一半；不勾选保持 1080p</small>
+                </span>
+            </label>
+            <p class="export-capability" id="export-capability"></p>
             <div class="export-status" id="export-status"></div>
             <div class="export-progress hidden" id="export-progress"><div id="export-progress-fill"></div></div>
             <div class="export-preview hidden" id="export-preview-wrap">
@@ -168,10 +193,10 @@
 
     <div class="toast" id="toast"></div>
 
-    <script src="scripts/engine.js?v=20261031c"></script>
-    <script src="scripts/walls.js?v=20261031c"></script>
-    <script src="scripts/scene.js?v=20261031c"></script>
-    <script src="scripts/vendor/mp4-muxer.js?v=20261031c"></script>
-    <script src="scripts/watch.js?v=20261031c"></script>
+    <script src="scripts/engine.js?v=20261103a"></script>
+    <script src="scripts/walls.js?v=20261103a"></script>
+    <script src="scripts/scene.js?v=20261103a"></script>
+    <script src="scripts/vendor/mp4-muxer.js?v=20261103a"></script>
+    <script src="scripts/watch.js?v=20261103e"></script>
 </body>
 </html>
