@@ -2,7 +2,7 @@
 
 > 交接时间：2026-11-07（PST）  
 > 仓库：<https://github.com/longguanhong0755/music-marbles>  
-> 分支：`master` @ `5fad984`（交接文档提交；功能基线为 `b9b2863`）  
+> 分支：`master`（功能基线 `b9b2863`；交接记录提交见 `git log`）  
 > 线上地址：<https://longguanhong0755.github.io/music-marbles/>  
 > 本机目录：`/root/MusicMarbles`
 
