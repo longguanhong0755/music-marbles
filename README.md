@@ -155,6 +155,10 @@ npm test
 - 原生 HTML5 Canvas
 - 原版使用 Tone.js 生成声音
 
+## 交接
+
+当前维护状态、验证记录、已知问题和接手建议见 [HANDOVER.md](HANDOVER.md)。
+
 ## 许可
 
 [MIT License](LICENSE)

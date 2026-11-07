@@ -6,6 +6,7 @@ engine/cmake-build-debug/
 
 node_modules/
 data/
+samples/
 
 .DS_Store
 *.log
