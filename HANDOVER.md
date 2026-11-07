@@ -15,11 +15,11 @@
 | 自动化测试 | `npm test` 通过：引擎全曲目/多种子通过，来源检查 8 项通过 |
 | 浏览器冒烟 | 通过：首页四首内置曲目、生成观看链接、播放进度、控制台无报错 |
 | GitHub 仓库 | 与远端同步，无 open issue / PR / release |
-| GitHub Actions | 交接时发现被关闭；已重新启用（`enabled=true`，允许所有 action） |
-| GitHub Pages | 交接时发现被关闭，线上 404；已重新启用为 `build_type=workflow`，并触发部署 |
-| 待确认 | Pages 部署队列是否恢复、线上子路径资源是否 200（见第 8 节） |
+| GitHub Actions | 交接时发现被关闭；已重新启用（`enabled=true`，允许所有 action）。历史 Pages workflow run 仍显示 queued，属于陈旧队列，可忽略 |
+| GitHub Pages | 交接时发现被关闭，线上 404；已重新启用。workflow 部署队列卡住后改为 legacy 构建（source `master` /），线上已恢复 200 |
+| 线上资源 | 已确认首页、观看页、`builtins/manifest.json`、`notes.json`、`scripts/watch.js`、`styles/watch.css` 均为 200 |
 
-> 结论：代码和本地功能是健康的；交接时真正的问题在 GitHub 侧的 Pages / Actions 被关闭，不是应用代码坏了。本次已把两个开关恢复，部署状态需要接手人最后确认一次。
+> 结论：代码和本地功能健康。交接时真正的问题是 GitHub 侧的 Pages / Actions 被关闭，不是应用代码坏了；两个开关已恢复，Pages 已用 legacy 构建重新上线。
 
 ## 2. 这个项目是什么
 
@@ -126,23 +126,23 @@ npm test
 
 ## 7. 已知问题与风险
 
-1. **GitHub Pages / Actions 曾被关闭（本次已恢复）。** 线上 404 的直接原因不是构建失败，而是 Pages 未启用；同时仓库 Actions 权限也是 `enabled=false`。如果之后又出现 404，先看 `Settings → Pages` 和 `Settings → Actions → General`，再看 Actions 里的 `pages build and deployment`。
+1. **GitHub Pages / Actions 曾被关闭（本次已恢复）。** 线上 404 的直接原因不是构建失败，而是 Pages 未启用；同时仓库 Actions 权限也是 `enabled=false`。恢复后旧的 Pages workflow 重跑一直停在 `queued`，因此本次把 Pages 改为 **legacy 构建**（source `master` /），由 GitHub 内部 builder 直接发布，线上已 200。这个 legacy 构建不依赖 Actions；如果以后要切回 workflow，先确认旧的 `pages build and deployment` run 已结束或被清理。
 2. **没有账号、限流和公网防护。** 项目定位是本机/可信局域网；不要直接把 8080 暴露到公网。上传内容会写 `data/`。
 3. **Incompetech 是单点外部依赖。** 目录或音频源不可达时，网络曲库会失败；本地上传和内置曲目不受影响。公开分享要保留 Kevin MacLeod / incompetech.com 署名（CC BY 4.0）。
 4. **导出性能因浏览器/机器差异很大。** WebCodecs 软件编码、`readback` 和编码队列都可能成为瓶颈；长曲在无硬件编码的机器上可能比实时播放更久。快速导出（720p）能明显减小文件。
 5. **自动化测试覆盖有边界。** `npm test` 只覆盖引擎和曲库，不覆盖 Express 上传、ffmpeg、真实浏览器播放/导出；这些仍靠人工冒烟。
 6. **工作区有历史验收产物。** 交接时 `samples/` 35 MB / 106 个截图和视频，`data/` 还有几十 MB 过期导出（会被 TTL 清掉）。`samples/` 已加入 `.gitignore`，是否保留由接手人决定。
-7. **静态模式和 Pages 子路径依赖一个约定。** `builtins/manifest.json` 里的路径以 `/builtins/...` 开头；`watch.js` / `landing.js` 会先去掉开头的 `/` 再用 `document.baseURI` 解析。不要把这个处理删掉，否则 Pages 子路径会 404。
+7. **静态模式和 Pages 子路径依赖一个约定。** 当前 Pages 使用 legacy 构建，`builtins/manifest.json` 里的路径以 `/builtins/...` 开头；`watch.js` / `landing.js` 会先去掉开头的 `/` 再用 `document.baseURI` 解析。不要把这个处理删掉，否则 Pages 子路径会 404。
 8. **静态资源靠手写 `?v=` 破缓存。** 改 `styles/*.css` 或 `scripts/*.js` 后，要同步改 `index.html` / `watch.html` 里的版本号，否则浏览器可能继续用旧文件。
-9. **仓库里没有 `.github/workflows`。** Pages 的 `pages build and deployment` 是 GitHub 自动生成的 dynamic workflow；不要以为删掉 workflow 文件就能停掉它，去 Settings 里控制。
+9. **仓库里没有 `.github/workflows`。** 当前 Pages 使用 Settings 里的 legacy 构建；Actions 里还留着旧的 dynamic `pages build and deployment` run。不要靠删 workflow 文件控制 Pages，去 `Settings → Pages` 查看构建方式和状态。
 10. **令牌安全。** 本次交接使用的 GitHub token 不应写进仓库、脚本或 `.git-credentials`；交接完成后建议在 GitHub 设置里轮换/撤销。
 
 ## 8. 接手后的建议顺序
 
-1. **先确认线上。** 打开 <https://longguanhong0755.github.io/music-marbles/>，确认 200；再打开一首内置曲目，确认 `builtins/manifest.json`、`notes.json`、`audio.mp3` 都是 200。若仍是 404，检查 Pages 是否保持 `workflow` 构建、Actions 是否仍启用，以及最新 `pages build and deployment` 的 deploy job 日志。
+1. **先确认线上。** 打开 <https://longguanhong0755.github.io/music-marbles/>，确认 200；再打开一首内置曲目，确认 `builtins/manifest.json`、`notes.json`、`audio.mp3` 都是 200。若仍是 404，检查 `Settings → Pages` 是否仍为 legacy / `master` / `/`，以及 latest Pages build 的状态。
 2. **再跑一次本机回归。** `npm test` + 第 6 节的浏览器冒烟；如果改过 `server/`，重启 8080。
 3. **决定是否清理。** `samples/` 可移到外部归档或删除；`data/` 交给 TTL 自动清理即可。
-4. **补一条最小浏览器 CI（可选）。** 用 Playwright/Puppeteer 跑“首页 → 内置曲目 → 观看页 → 播放 2 秒 → 无 console error”，比人工截图更能防止回归。注意仓库 Actions 目前是手动恢复的，先确认额度/策略。
+4. **补一条最小浏览器 CI（可选）。** 用 Playwright/Puppeteer 跑“首页 → 内置曲目 → 观看页 → 播放 2 秒 → 无 console error”，比人工截图更能防止回归。注意 Actions 是本次手动恢复的，队列里还有历史 Pages run，先确认额度和策略。
 5. **要公网部署时再加防护。** 至少加反向代理、上传限流、鉴权和持久化磁盘；当前实现不适合直接公网暴露。
 6. **性能优化再看导出。** 优先确认目标浏览器的 `VideoEncoder` 硬件支持，再决定是否调整 `readback`、sprite 缓存或编码队列；不要为了跑分牺牲 30 fps 和音画同步。
 
@@ -153,9 +153,9 @@ npm test
 - [x] 本地 8080 健康检查、内置音频、曲库搜索通过
 - [x] 浏览器冒烟通过（首页 / 生成链接 / 观看页播放）
 - [x] 恢复 GitHub Actions（仓库级）
-- [x] 恢复 GitHub Pages（workflow 构建）并触发部署
+- [x] 恢复 GitHub Pages（legacy 构建）并确认线上 200
 - [x] 写入交接文档，忽略本地 `samples/`
-- [ ] 确认线上 Pages 部署完成且子路径资源 200
+- [x] 确认线上 Pages 部署完成且首页/观看页/子路径资源 200
 - [ ] 轮换本次交接使用的 GitHub token
 - [ ] 决定 `samples/` 和历史 `data/` 的保留策略
 
