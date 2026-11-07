@@ -286,6 +286,23 @@
             octx.restore();
         }
 
+        // Fill only the open room, i.e. the corridor the marble travels
+        // through. Called before draw() so the black wall blocks and posts
+        // stay on top, while the field outside the room remains pure black.
+        draw_room(view, color) {
+            const scale = view.scale;
+            if (!(scale > 0)) return;
+            const ctx = view.ctx;
+            ctx.save();
+            ctx.fillStyle = color || '#2b2f35';
+            ctx.setTransform(
+                view.dpr * scale, 0, 0, view.dpr * scale,
+                view.dpr * view.offset[0], view.dpr * view.offset[1]
+            );
+            ctx.fill(this.room);
+            ctx.restore();
+        }
+
         draw(view) {
             const scale = view.scale;
             if (!(scale > 0)) return;

@@ -202,12 +202,15 @@
             return;
         }
 
-        // The dark theme is a flat pure-black field: no stars, no gradient,
-        // no vignette. Walls remain black; the idle bars are dark grey so the
-        // track is still readable against the background.
+        // The dark theme is a flat pure-black field. The open corridor the
+        // marble travels through is dark grey; the surrounding walls stay pure
+        // black, and the idle bars sit slightly lighter so the track reads.
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, w, h);
-        if (wall_field) wall_field.draw(view);
+        if (wall_field) {
+            wall_field.draw_room(view, '#2b2f35');
+            wall_field.draw(view);
+        }
     }
 
     const PLANK_VISUAL_LEN = 28;
