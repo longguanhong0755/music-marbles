@@ -202,23 +202,12 @@
             return;
         }
 
-        const g = ctx.createRadialGradient(w * 0.5, h * 0.38, 0, w * 0.5, h * 0.38, Math.max(w, h) * 0.72);
-        g.addColorStop(0, '#101a30');
-        g.addColorStop(0.52, '#080d18');
-        g.addColorStop(1, '#03050b');
-        ctx.fillStyle = g;
+        // The dark theme is a flat pure-black field: no stars, no gradient,
+        // no vignette. Walls remain black; the idle bars are dark grey so the
+        // track is still readable against the background.
+        ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, w, h);
-        draw_stars(view);
-
-        // Walls sit over the stars but under the vignette so the whole field
-        // still feels like one dark room.
         if (wall_field) wall_field.draw(view);
-
-        const v = ctx.createRadialGradient(w * 0.5, h * 0.5, Math.min(w, h) * 0.25, w * 0.5, h * 0.5, Math.max(w, h) * 0.72);
-        v.addColorStop(0, 'rgba(0,0,0,0)');
-        v.addColorStop(1, 'rgba(0,0,0,0.38)');
-        ctx.fillStyle = v;
-        ctx.fillRect(0, 0, w, h);
     }
 
     const PLANK_VISUAL_LEN = 28;
@@ -239,7 +228,7 @@
         const vh = Math.ceil(len + pad * 2);
         const hw = vh;
         const hh = vw;
-        const base_color = theme === BACKGROUND_LIGHT ? '#e8e9ec' : '#ffffff';
+        const base_color = theme === BACKGROUND_LIGHT ? '#e8e9ec' : '#4a4f56';
         const hit_lightness = theme === BACKGROUND_LIGHT ? 46 : 72;
 
         function base_sprite(vertical) {
@@ -330,7 +319,7 @@
             const y = sy - h * 0.5;
 
             if (!struck) {
-                ctx.globalAlpha = sprites.theme === BACKGROUND_LIGHT ? 1 : 0.78;
+                ctx.globalAlpha = 1;
                 ctx.drawImage(this.vertical ? sprites.base_v : sprites.base_h, x, y, w, h);
             } else {
                 ctx.globalAlpha = 1;
